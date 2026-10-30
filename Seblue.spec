@@ -7,7 +7,7 @@ miniaudio_datas, miniaudio_binaries, miniaudio_hiddenimports = collect_all('mini
 cffi_datas, cffi_binaries, cffi_hiddenimports = collect_all('cffi')
 
 a = Analysis(
-    ['Multi-Blu.pyw'],
+    ['Seblue.pyw'],
     pathex=[],
     binaries=miniaudio_binaries + cffi_binaries,
     datas=[('assets/Sony-DTS-Sound.mp3', 'assets')] + miniaudio_datas + cffi_datas,
@@ -28,7 +28,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='Multi-Blu',
+    name='Seblue',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -41,5 +41,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['assets/multiblu.ico'],
+    icon=['assets/seblue.ico'],
 )

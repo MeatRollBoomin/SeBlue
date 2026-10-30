@@ -1,4 +1,4 @@
-"""Generate assets/multiblu.ico -- a mint tile with a broadcast glyph.
+"""Generate assets/seblue.ico -- a mint tile with a broadcast glyph.
 
 Drawn straight into a numpy array and written as a classic BMP-backed .ico, so
 the build needs no image library. Run it only when the icon should change:
@@ -16,7 +16,7 @@ import numpy as np
 ACCENT = (0x3E, 0xD5, 0x98)      # mint, matching the app's accent
 INK = (0x0B, 0x0C, 0x0F)         # near-black, matching the app background
 SIZES = (256, 128, 64, 48, 32, 16)
-OUT = pathlib.Path(__file__).resolve().parent.parent / "assets" / "multiblu.ico"
+OUT = pathlib.Path(__file__).resolve().parent.parent / "assets" / "seblue.ico"
 
 
 def _coverage(distance: np.ndarray, edge: float, softness: float = 1.2) -> np.ndarray:

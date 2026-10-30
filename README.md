@@ -1,4 +1,4 @@
-<h1 align="center">Multi-Blu</h1>
+<h1 align="center">Seblue</h1>
 
 <p align="center">
   Play the same audio through several pairs of headphones at once, so two or
@@ -7,14 +7,14 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshot.png" alt="Multi-Blu" width="420">
+  <img src="docs/screenshot.png" alt="Seblue" width="420">
 </p>
 
 ---
 
 ## Download
 
-Grab **Multi-Blu.exe** from the [latest release](https://github.com/shreyasmandem/multi-blu/releases/latest).
+Grab **Seblue.exe** from the [latest release](https://github.com/shreyasmandem/multi-blu/releases/latest).
 It is a single file — no installer, no Python, nothing to set up. Double-click it.
 
 > **Windows 10/11 only.** The whole thing is built on WASAPI loopback and the
@@ -24,7 +24,7 @@ It is a single file — no installer, no Python, nothing to set up. Double-click
 ## What it does
 
 Windows sends audio to exactly one output device at a time, and there is no
-setting anywhere to change that. Multi-Blu adds the missing one.
+setting anywhere to change that. Seblue adds the missing one.
 
 1. **Playing from** shows the device Windows is already using. Whoever is on
    that device keeps hearing everything exactly as before.
@@ -32,12 +32,14 @@ setting anywhere to change that. Multi-Blu adds the missing one.
    device starts playing the same audio.
 3. Each device that is switched on gets its **own volume**, so two people can
    listen at different levels — something Windows cannot do at all.
-4. Each device also gets a **delay** slider, to line it up by ear with the
-   others (see [Getting them in sync](#getting-them-in-sync)).
-5. **Test sound** plays the bundled Sony DTS clip through that selected device.
-6. **+ Add a Bluetooth device** opens Windows Bluetooth pairing. Once a device
+4. A **four-bar quality indicator** reflects recent playback underruns. It
+   measures stream stability, not Bluetooth radio signal strength.
+5. Each device has a **mute** button and a **delay** slider, to line it up by ear
+   with the others (see [Getting them in sync](#getting-them-in-sync)).
+6. **Test sound** plays the bundled Sony DTS clip through that selected device.
+7. **+ Add a Bluetooth device** opens Windows Bluetooth pairing. Once a device
    connects it appears in the list on its own — no restart needed.
-7. The window follows Windows **light/dark mode and accent colour**, and uses
+8. The window follows Windows **light/dark mode and accent colour**, and uses
    the **Mica** backdrop on Windows 11.
 
 Use **Tab** to focus a device switch and **Space** or **Enter** to toggle it.
@@ -53,14 +55,14 @@ off and it stops. Your choices and volumes are remembered for next time.
   playing to — the same mechanism screen recorders use to capture desktop audio.
 - That audio is copied into a ring buffer per extra device and rendered out to
   all of them simultaneously.
-- **Nothing about your audio setup is changed.** No default device is switched,
-  no device is muted, no system setting is written. If the app is closed or
-  killed, there is nothing to restore.
+- **No virtual audio driver or persistent routing changes.** Seblue uses
+  Windows endpoint controls for source selection, per-device volume, and mute.
+  If the app is closed or killed, its audio streams stop.
 
 Each listener runs off its own sound-card clock, so their buffers drift apart
 over time. Three details keep it clean:
 
-| Problem | What Multi-Blu does |
+| Problem | What Seblue does |
 | --- | --- |
 | Buffers drift apart | Corrects by **resampling a block by a few samples**, never by duplicating or dropping raw ones. A duplicated sample is a step change, and at 50 blocks a second that is audible as a buzz. |
 | A device can't keep up | Its cushion grows automatically, **and every other device grows with it**, so they stay aligned instead of sliding apart. |
@@ -69,7 +71,7 @@ over time. Three details keep it clean:
 
 ## Getting them in sync
 
-Multi-Blu automatically aligns devices using the latency PortAudio reports.
+Seblue automatically aligns devices using the latency PortAudio reports.
 That covers the host buffer, but it **cannot see the delay a Bluetooth codec
 adds after that**, which differs between devices — an SBC speaker and an aptX
 headset can be over a hundred milliseconds apart, and nothing in Windows exposes
@@ -80,7 +82,7 @@ beat, stand between the two listeners, and drag the slider on whichever device
 is *early* until the two line up. It applies instantly and is remembered.
 
 The device under **Playing from** is always the earliest, because its audio
-never passes through Multi-Blu at all. If you want everyone perfectly level,
+never passes through Seblue at all. If you want everyone perfectly level,
 set *Playing from* to a device nobody is listening on (your laptop speakers,
 turned down) and switch on every pair of headphones instead.
 
@@ -88,10 +90,10 @@ turned down) and switch on every pair of headphones instead.
 
 This is a limit of your **Bluetooth adapter**, not of this app. Most modern
 adapters hold two audio devices at once; some refuse the second connection.
-Multi-Blu was developed and tested with two connected simultaneously.
+Seblue was developed and tested with two connected simultaneously.
 
 If Windows itself will not connect a second pair, a cheap USB Bluetooth dongle
-for the second one works — Multi-Blu treats it like any other output device.
+for the second one works — Seblue treats it like any other output device.
 
 ## Why Windows only
 
@@ -114,7 +116,7 @@ there.
 
 ```bash
 pip install -r requirements.txt
-python Multi-Blu.pyw
+python Seblue.pyw
 ```
 
 Offline tests — fan-out, format adaptation, drift correction, alignment — need
@@ -129,10 +131,10 @@ Build the standalone executable:
 
 ```bash
 pip install pyinstaller
-python -m PyInstaller --noconfirm --clean Multi-Blu.spec
+python -m PyInstaller --noconfirm --clean Seblue.spec
 ```
 
-The result is `dist/Multi-Blu.exe`; PyInstaller's work files stay in `build/`.
+The result is `dist/Seblue.exe`; PyInstaller's work files stay in `build/`.
 
 ## Layout
 
@@ -140,7 +142,7 @@ The result is `dist/Multi-Blu.exe`; PyInstaller's work files stay in `build/`.
     multiblu/engine.py      loopback capture, ring buffers, drift, alignment, fan-out
     multiblu/app.py         the window
     multiblu/theme.py       Windows palette, accent, and Mica backdrop
-    tools/make_icon.py      regenerates assets/multiblu.ico
+    tools/make_icon.py      regenerates assets/seblue.ico
     tests/test_fanout.py    offline checks, no hardware needed
     tests/test_theme.py     palette and accent checks, no hardware needed
 

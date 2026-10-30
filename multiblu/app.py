@@ -1,4 +1,4 @@
-"""Multi-Blu's window.
+"""Seblue's window.
 
 One list. Flip the switch next to a pair of headphones and they start hearing
 whatever this machine is playing. Nothing else to set up.
@@ -53,7 +53,8 @@ MAGIC = GLASS_KEYS[True]
 SURFACE = BG
 
 UI = "Segoe UI"
-SETTINGS = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Multi-Blu" / "settings.json"
+APP_DATA = Path(os.environ.get("LOCALAPPDATA", Path.home()))
+SETTINGS = APP_DATA / "Seblue" / "settings.json"
 APP_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
 TEST_SOUND = APP_ROOT / "assets" / "Sony-DTS-Sound.mp3"
 SCAN_MS = 1500
@@ -129,6 +130,66 @@ def _enable_dpi() -> None:
         SCALE = ctypes.windll.user32.GetDpiForSystem() / 96.0
     except Exception:
         SCALE = 1.0
+
+
+class Tooltip:
+    """Small delayed tooltip for a control or icon."""
+
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self._job = None
+        self._window = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+        widget.bind("<Destroy>", self._destroyed, add="+")
+
+    def _schedule(self, _event=None) -> None:
+        self._cancel_job()
+        self._job = self.widget.after(450, self._show)
+
+    def _show(self) -> None:
+        self._job = None
+        if not self.widget.winfo_exists():
+            return
+        message = self.text() if callable(self.text) else self.text
+        if not message:
+            return
+        tip = tk.Toplevel(self.widget)
+        tip.wm_overrideredirect(True)
+        tip.attributes("-topmost", True)
+        tk.Label(tip, text=message, bg=CARD, fg=TEXT, font=(UI, 8),
+                 justify="left", wraplength=px(280), padx=px(8), pady=px(5),
+                 relief="solid", bd=1, highlightbackground=EDGE).pack()
+        tip.update_idletasks()
+        x = self.widget.winfo_pointerx() + px(12)
+        y = self.widget.winfo_pointery() + px(18)
+        x = min(x, tip.winfo_screenwidth() - tip.winfo_width() - px(8))
+        y = min(y, tip.winfo_screenheight() - tip.winfo_height() - px(8))
+        tip.wm_geometry("+%d+%d" % (max(0, x), max(0, y)))
+        self._window = tip
+
+    def _cancel_job(self) -> None:
+        if self._job is not None:
+            try:
+                self.widget.after_cancel(self._job)
+            except Exception:
+                pass
+            self._job = None
+
+    def _hide(self, _event=None) -> None:
+        self._cancel_job()
+        if self._window is not None:
+            try:
+                self._window.destroy()
+            except Exception:
+                pass
+            self._window = None
+
+    def _destroyed(self, event) -> None:
+        if event.widget is self.widget:
+            self._hide()
 
 
 class Toggle(tk.Canvas):
@@ -219,6 +280,7 @@ class Slider(tk.Canvas):
                          highlightthickness=0, bd=0, cursor="hand2")
         self.command = command
         self.value = 1.0
+        self.enabled = True
         self._span = px(150)
         self.bind("<Button-1>", self._drag)
         self.bind("<B1-Motion>", self._drag)
@@ -229,11 +291,18 @@ class Slider(tk.Canvas):
         self.value = max(0.0, min(1.0, value))
         self._render()
 
+    def set_enabled(self, enabled: bool) -> None:
+        self.enabled = bool(enabled)
+        self.configure(cursor="hand2" if self.enabled else "arrow")
+        self._render()
+
     def _resized(self, event) -> None:
         self._span = event.width
         self._render()
 
     def _drag(self, event) -> None:
+        if not self.enabled:
+            return
         usable = max(1, self._span - 2 * self.knob)
         self.value = max(0.0, min(1.0, (event.x - self.knob) / usable))
         self._render()
@@ -244,12 +313,51 @@ class Slider(tk.Canvas):
         self.delete("all")
         y = self.h / 2
         x0, x1 = self.knob, max(self.knob + 1, self._span - self.knob)
-        self.create_line(x0, y, x1, y, fill=TRACK, width=px(4), capstyle=tk.ROUND)
+        track = TRACK if self.enabled else EDGE
+        value_color = ACCENT if self.enabled else FAINT
+        knob_color = KNOB if self.enabled else DIM
+        self.create_line(x0, y, x1, y, fill=track, width=px(4), capstyle=tk.ROUND)
         cx = x0 + self.value * (x1 - x0)
         if cx > x0:
-            self.create_line(x0, y, cx, y, fill=ACCENT, width=px(4), capstyle=tk.ROUND)
+            self.create_line(x0, y, cx, y, fill=value_color,
+                             width=px(4), capstyle=tk.ROUND)
         self.create_oval(cx - self.knob, y - self.knob, cx + self.knob, y + self.knob,
-                         fill=KNOB, outline="")
+                         fill=knob_color, outline="")
+
+
+class QualityIndicator(tk.Canvas):
+    """Four bars showing recent playback stability for an output device."""
+
+    def __init__(self, master):
+        self.width, self.height = px(18), px(14)
+        super().__init__(master, width=self.width, height=self.height,
+                         bg=CARD, highlightthickness=0, bd=0)
+        self.level = None
+        self._render()
+
+    def set_level(self, level: int | None) -> None:
+        self.level = None if level is None else max(0, min(4, level))
+        self._render()
+
+    def _render(self) -> None:
+        self.delete("all")
+        heights = (px(3), px(5), px(8), px(11))
+        bar_width, gap = px(3), px(1)
+        if self.level is None or self.level == 0:
+            active_color = EDGE
+        elif self.level == 1:
+            active_color = "#EF4444"
+        elif self.level == 2:
+            active_color = "#F59E0B"
+        else:
+            active_color = "#22C55E"
+
+        baseline = self.height - px(1)
+        for index, height in enumerate(heights):
+            x0 = px(1) + index * (bar_width + gap)
+            color = active_color if self.level is not None and index < self.level else EDGE
+            self.create_rectangle(x0, baseline - height, x0 + bar_width,
+                                  baseline, fill=color, outline="")
 
 
 class DeviceRow(tk.Frame):
@@ -269,9 +377,14 @@ class DeviceRow(tk.Frame):
 
         labels = tk.Frame(head, bg=CARD)
         labels.pack(side="left", fill="x", expand=True)
-        self.name = tk.Label(labels, text=device.name, bg=CARD, fg=TEXT,
-                             font=(UI, 10), anchor="w", justify="left")
-        self.name.pack(fill="x")
+        name_row = tk.Frame(labels, bg=CARD)
+        name_row.pack(fill="x")
+        self.name = tk.Label(name_row, text=device.name, bg=CARD, fg=TEXT,
+                             font=(UI, 10), anchor="w", justify="left",
+                             wraplength=px(240))
+        self.name.pack(side="left", anchor="w")
+        self.quality = QualityIndicator(name_row)
+        self.quality.pack(side="left", padx=(px(5), 0))
         _icon, device_type = _device_info(device.name)
         self.type_label = tk.Label(labels, text=device_type, bg=CARD, fg=FAINT,
                                    font=(UI, 8), anchor="w")
@@ -297,6 +410,21 @@ class DeviceRow(tk.Frame):
         self.percent = tk.Label(self.volume_row, text="", bg=CARD, fg=DIM,
                                 font=(UI, 8), width=4, anchor="e")
         self.percent.pack(side="right", padx=(px(8), 0))
+        self._mute_images = {
+            False: _fontawesome_image("volume-high", px(16), ACCENT_FG),
+            True: _fontawesome_image("volume-xmark", px(16), ACCENT_FG),
+        }
+        self._muted = False
+        self.mute_button = tk.Button(
+            self.volume_row, image=self._mute_images[False],
+            command=self._toggle_mute,
+            bg=CARD, fg=ACCENT_FG, activebackground=HOVER,
+            activeforeground=ACCENT_FG, relief="flat", bd=0,
+            highlightthickness=1, highlightbackground=CARD,
+            highlightcolor=ACCENT, font=(UI, 8), padx=px(4), pady=0,
+            cursor="hand2", takefocus=True)
+        self.mute_button.pack(side="left", before=self.slider,
+                              padx=(0, px(6)))
 
         self.sync_row = tk.Frame(self, bg=CARD)
         tk.Label(self.sync_row, text="delay", bg=CARD, fg=FAINT, font=(UI, 8),
@@ -324,12 +452,48 @@ class DeviceRow(tk.Frame):
             highlightcolor=ACCENT, font=(UI, 8), padx=0, pady=0,
             cursor="hand2", takefocus=True)
         self.test_button.pack(side="left")
+        self._tooltips = [
+            Tooltip(self.name, device.name),
+            Tooltip(self.quality, self._quality_tooltip),
+            Tooltip(self.toggle, self._toggle_tooltip),
+            Tooltip(self.slider, "Adjust this device's output volume."),
+            Tooltip(self.mute_button, self._mute_tooltip),
+            Tooltip(self.sync, "Adjust playback delay to sync this device."),
+            Tooltip(self.retry_button, "Retry connecting this device."),
+            Tooltip(self.test_button, self._test_tooltip),
+        ]
 
         self.spacer = tk.Frame(self, bg=CARD, height=px(10))
         self.spacer.pack(fill="x")
 
     def _toggled(self, on: bool) -> None:
         self.app.set_selected(self.device.id, on)
+
+    def _toggle_tooltip(self) -> str:
+        action = "Stop routing audio to" if self.device.id in self.app.selected else "Route audio to"
+        return "%s %s." % (action, self.device.name)
+
+    def _mute_tooltip(self) -> str:
+        return "Unmute this device." if self._muted else "Mute this device."
+
+    def _test_tooltip(self) -> str:
+        if self.app._test_state.get(self.device.id) == "Playing test sound":
+            return "Pause the test sound."
+        if self.app._test_state.get(self.device.id) == "Test sound paused":
+            return "Resume the test sound."
+        return "Play a test sound on this device."
+
+    def _quality_tooltip(self) -> str:
+        if self.quality.level is None:
+            return "Playback stability is unavailable until this device is connected."
+        descriptions = {
+            0: "No playback stability data yet.",
+            1: "Weak playback stability: frequent audio underruns.",
+            2: "Medium playback stability: occasional audio underruns.",
+            3: "Strong playback stability: few recent audio underruns.",
+            4: "Strong playback stability: no recent audio underruns.",
+        }
+        return descriptions[self.quality.level] + " This is not Bluetooth signal strength."
 
     def _retry(self) -> None:
         self.retry_button.configure(state="disabled", text="Retrying…")
@@ -351,6 +515,17 @@ class DeviceRow(tk.Frame):
         self.percent.configure(text="%d%%" % round(value * 100))
         ep.set_volume(self.device.id, value)
 
+    def _show_mute_state(self, muted: bool) -> None:
+        self._muted = muted
+        self.mute_button.configure(image=self._mute_images[muted])
+        self.slider.set_enabled(not muted)
+        self.percent.configure(fg=FAINT if muted else DIM)
+
+    def _toggle_mute(self) -> None:
+        muted = not self._muted
+        if ep.set_mute(self.device.id, muted):
+            self._show_mute_state(muted)
+
     def _delay(self, value: float) -> None:
         seconds = value * MAX_DELAY
         self.sync_value.configure(text="%d ms" % round(seconds * 1000))
@@ -363,6 +538,9 @@ class DeviceRow(tk.Frame):
             if level is not None:
                 self.slider.set(level)
                 self.percent.configure(text="%d%%" % round(level * 100))
+            muted = ep.get_mute(self.device.id)
+            if muted is not None:
+                self._show_mute_state(muted)
             seconds = self.app.delays.get(self.device.id, 0.0)
             self.sync.set(seconds / MAX_DELAY)
             self.sync_value.configure(text="%d ms" % round(seconds * 1000))
@@ -410,6 +588,10 @@ class AddDeviceButton(tk.Frame):
         caption.pack(side="left", fill="x", expand=True)
 
         self._parts = (self, inner, icon, caption)
+        self._tooltips = [
+            Tooltip(widget, "Open Bluetooth settings to add a device.")
+            for widget in self._parts
+        ]
         for widget in self._parts:
             widget.configure(cursor="hand2")
             widget.bind("<Button-1>", lambda e: self.command())
@@ -575,7 +757,7 @@ class App(tk.Tk):
         key = GLASS_KEYS[self._theme.dark]
         SURFACE = key if self._glass else BG
 
-        self.title("Multi-Blu")
+        self.title("Seblue")
         self.configure(bg=SURFACE)
         self.wm_attributes("-transparentcolor", key if self._glass else "")
         self.geometry("%dx%d" % (px(430), px(560)))
@@ -597,8 +779,10 @@ class App(tk.Tk):
         self._test_jobs: dict = {}
         self._test_remaining: dict = {}
         self._test_started_at: dict = {}
+        self._quality_last_underruns: dict[str, int] = {}
         self._scan_job = None
         self._theme_job = None
+        self._quality_job = None
 
         self._build()
         self._apply_window_theme(rebuild=False)
@@ -609,6 +793,7 @@ class App(tk.Tk):
         self._scan()
         self._drain()
         self._theme_job = self.after(1500, self._watch_theme)
+        self._quality_job = self.after(1000, self._refresh_quality)
 
     # -- layout ------------------------------------------------------------
 
@@ -616,7 +801,7 @@ class App(tk.Tk):
         outer = tk.Frame(self, bg=SURFACE)
         outer.pack(fill="both", expand=True, padx=px(18), pady=px(16))
 
-        tk.Label(outer, text="Multi-Blu", bg=SURFACE, fg=TEXT,
+        tk.Label(outer, text="Seblue", bg=SURFACE, fg=TEXT,
                  font=(UI, 17, "bold"), anchor="w").pack(fill="x")
         self.subtitle = tk.Label(outer, text="Play your audio on several headphones at once",
                                  bg=SURFACE, fg=DIM, font=(UI, 9), anchor="w",
@@ -636,6 +821,8 @@ class App(tk.Tk):
                                font=(UI, 9), cursor="hand2")
         self.change.pack(side="right")
         self.change.bind("<Button-1>", self._choose_source)
+        self._source_tooltip = Tooltip(
+            self.change, "Choose which Windows output device Seblue shares audio from.")
 
         self._caption(outer, "ALSO PLAYING TO")
 
@@ -943,6 +1130,37 @@ class App(tk.Tk):
             self._paint_status()
         self.after(120, self._drain)
 
+    def _refresh_quality(self) -> None:
+        try:
+            stats = self.engine.stats()
+        except Exception:
+            stats = {}
+
+        for device_id, row in self.rows.items():
+            if not isinstance(row, DeviceRow):
+                continue
+            device_stats = stats.get(device_id) if device_id in self.selected else None
+            if device_stats is None:
+                self._quality_last_underruns.pop(device_id, None)
+                row.quality.set_level(None)
+                continue
+
+            underruns = int(device_stats.get("underruns", 0))
+            previous = self._quality_last_underruns.get(device_id, underruns)
+            recent = max(0, underruns - previous)
+            self._quality_last_underruns[device_id] = underruns
+            if recent == 0:
+                level = 4
+            elif recent <= 2:
+                level = 3
+            elif recent <= 8:
+                level = 2
+            else:
+                level = 1
+            row.quality.set_level(level)
+
+        self._quality_job = self.after(1000, self._refresh_quality)
+
     def _paint_notes(self) -> None:
         report = self._report or {}
         failed = report.get("failed", {})
@@ -1054,7 +1272,8 @@ class App(tk.Tk):
             pass
 
     def _close(self) -> None:
-        for job in (self._scan_job, self._theme_job, *self._test_jobs.values()):
+        for job in (self._scan_job, self._theme_job, self._quality_job,
+                    *self._test_jobs.values()):
             if job is not None:
                 try:
                     self.after_cancel(job)

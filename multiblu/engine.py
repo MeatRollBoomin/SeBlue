@@ -662,16 +662,17 @@ class Engine:
     # -- status ------------------------------------------------------------
 
     def stats(self) -> dict:
-        return {
-            key: {
-                "underruns": l.underruns,
-                "buffer_ms": int(1000 * l.ring.count / l.rate) if l.ring else 0,
-                "target_ms": int(1000 * l.target / l.rate),
-                "delay_ms": int(1000 * l.user_delay / l.rate),
-                "latency_ms": int(1000 * l.latency),
-                "rate": l.rate,
-                "channels": l.channels,
-                "error": l.error,
+        with self._lock:
+            return {
+                key: {
+                    "underruns": l.underruns,
+                    "buffer_ms": int(1000 * l.ring.count / l.rate) if l.ring else 0,
+                    "target_ms": int(1000 * l.target / l.rate),
+                    "delay_ms": int(1000 * l.user_delay / l.rate),
+                    "latency_ms": int(1000 * l.latency),
+                    "rate": l.rate,
+                    "channels": l.channels,
+                    "error": l.error,
+                }
+                for key, l in self._listeners.items()
             }
-            for key, l in self._listeners.items()
-        }
