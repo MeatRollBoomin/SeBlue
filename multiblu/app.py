@@ -159,9 +159,15 @@ class Tooltip:
         tip = tk.Toplevel(self.widget)
         tip.wm_overrideredirect(True)
         tip.attributes("-topmost", True)
-        tk.Label(tip, text=message, bg=CARD, fg=TEXT, font=(UI, 8),
+        tip.configure(bg=SURFACE)
+        if SURFACE == MAGIC:
+            tip.wm_attributes("-transparentcolor", MAGIC)
+        panel = RoundedFrame(tip, fill=CARD, border=EDGE, corner_bg=SURFACE,
+                             radius=px(8))
+        panel.pack()
+        tk.Label(panel, text=message, bg=CARD, fg=TEXT, font=(UI, 8),
                  justify="left", wraplength=px(280), padx=px(8), pady=px(5),
-                 relief="solid", bd=1, highlightbackground=EDGE).pack()
+                 bd=0).pack(padx=px(4), pady=px(2))
         tip.update_idletasks()
         x = self.widget.winfo_pointerx() + px(12)
         y = self.widget.winfo_pointery() + px(18)
@@ -190,6 +196,57 @@ class Tooltip:
     def _destroyed(self, event) -> None:
         if event.widget is self.widget:
             self._hide()
+
+
+class RoundedFrame(tk.Frame):
+    """A regular Tk frame with a rounded, antialiased-looking card surface."""
+
+    def __init__(self, master, *, fill=CARD, border=EDGE, corner_bg=BG,
+                 radius=10, **kwargs):
+        super().__init__(master, bg=corner_bg, bd=0, highlightthickness=0, **kwargs)
+        self._fill = fill
+        self._border = border
+        self._corner_bg = corner_bg
+        self._radius = radius
+        self._surface = tk.Canvas(self, bg=corner_bg, bd=0,
+                                  highlightthickness=0, takefocus=False)
+        self._surface.place(x=0, y=0, relwidth=1, relheight=1)
+        self.bind("<Configure>", self._draw_surface, add="+")
+
+    def set_fill(self, fill: str) -> None:
+        self._fill = fill
+        self._draw_surface()
+
+    def set_border(self, border: str) -> None:
+        self._border = border
+        self._draw_surface()
+
+    def _shape(self, x0, y0, x1, y1, radius, color) -> None:
+        canvas = self._surface
+        radius = max(0, min(radius, (x1 - x0) // 2, (y1 - y0) // 2))
+        if radius == 0:
+            canvas.create_rectangle(x0, y0, x1, y1, fill=color, outline="")
+            return
+        canvas.create_rectangle(x0 + radius, y0, x1 - radius, y1,
+                                fill=color, outline="")
+        canvas.create_rectangle(x0, y0 + radius, x1, y1 - radius,
+                                fill=color, outline="")
+        for x, y in ((x0, y0), (x1 - 2 * radius, y0),
+                     (x0, y1 - 2 * radius), (x1 - 2 * radius, y1 - 2 * radius)):
+            canvas.create_oval(x, y, x + 2 * radius, y + 2 * radius,
+                               fill=color, outline="")
+
+    def _draw_surface(self, _event=None) -> None:
+        if not self.winfo_exists():
+            return
+        width, height = self.winfo_width(), self.winfo_height()
+        self._surface.configure(bg=self._corner_bg)
+        self._surface.delete("all")
+        if width < 3 or height < 3:
+            return
+        radius = min(self._radius, width // 2, height // 2)
+        self._shape(0, 0, width - 1, height - 1, radius, self._border)
+        self._shape(1, 1, width - 2, height - 2, max(0, radius - 1), self._fill)
 
 
 class Toggle(tk.Canvas):
@@ -277,13 +334,18 @@ class Slider(tk.Canvas):
             bg = CARD
         self.h, self.knob = px(20), px(6)
         super().__init__(master, width=px(150), height=self.h, bg=bg,
-                         highlightthickness=0, bd=0, cursor="hand2")
+                         highlightthickness=1, highlightbackground=bg,
+                         highlightcolor=ACCENT, bd=0, cursor="hand2",
+                         takefocus=True)
         self.command = command
         self.value = 1.0
         self.enabled = True
         self._span = px(150)
         self.bind("<Button-1>", self._drag)
         self.bind("<B1-Motion>", self._drag)
+        for key in ("Left", "Down", "Right", "Up", "Home", "End",
+                    "Prior", "Next"):
+            self.bind("<KeyPress-%s>" % key, self._keyboard_adjust)
         self.bind("<Configure>", self._resized)
         self._render()
 
@@ -294,6 +356,7 @@ class Slider(tk.Canvas):
     def set_enabled(self, enabled: bool) -> None:
         self.enabled = bool(enabled)
         self.configure(cursor="hand2" if self.enabled else "arrow")
+        self.configure(takefocus=self.enabled)
         self._render()
 
     def _resized(self, event) -> None:
@@ -303,11 +366,32 @@ class Slider(tk.Canvas):
     def _drag(self, event) -> None:
         if not self.enabled:
             return
+        self.focus_set()
         usable = max(1, self._span - 2 * self.knob)
         self.value = max(0.0, min(1.0, (event.x - self.knob) / usable))
         self._render()
         if self.command:
             self.command(self.value)
+
+    def _keyboard_adjust(self, event):
+        if not self.enabled:
+            return "break"
+        if event.keysym in ("Left", "Down"):
+            value = self.value - 0.02
+        elif event.keysym in ("Right", "Up"):
+            value = self.value + 0.02
+        elif event.keysym == "Prior":
+            value = self.value + 0.10
+        elif event.keysym == "Next":
+            value = self.value - 0.10
+        elif event.keysym == "Home":
+            value = 0.0
+        else:
+            value = 1.0
+        self.set(value)
+        if self.command:
+            self.command(self.value)
+        return "break"
 
     def _render(self) -> None:
         self.delete("all")
@@ -360,11 +444,12 @@ class QualityIndicator(tk.Canvas):
                                   baseline, fill=color, outline="")
 
 
-class DeviceRow(tk.Frame):
+class DeviceRow(RoundedFrame):
     """One output device: name, on/off switch, and volume once it is on."""
 
     def __init__(self, master, app, device):
-        super().__init__(master, bg=CARD, highlightbackground=EDGE, highlightthickness=1)
+        super().__init__(master, fill=CARD, border=EDGE, corner_bg=SURFACE,
+                         radius=px(10))
         self.app = app
         self.device = device
 
@@ -405,11 +490,6 @@ class DeviceRow(tk.Frame):
         self.toggle.pack(side="right", padx=(px(10), 0))
 
         self.volume_row = tk.Frame(self, bg=CARD)
-        self.slider = Slider(self.volume_row, command=self._volume)
-        self.slider.pack(side="left", fill="x", expand=True)
-        self.percent = tk.Label(self.volume_row, text="", bg=CARD, fg=DIM,
-                                font=(UI, 8), width=4, anchor="e")
-        self.percent.pack(side="right", padx=(px(8), 0))
         self._mute_images = {
             False: _fontawesome_image("volume-high", px(16), ACCENT_FG),
             True: _fontawesome_image("volume-xmark", px(16), ACCENT_FG),
@@ -423,8 +503,12 @@ class DeviceRow(tk.Frame):
             highlightthickness=1, highlightbackground=CARD,
             highlightcolor=ACCENT, font=(UI, 8), padx=px(4), pady=0,
             cursor="hand2", takefocus=True)
-        self.mute_button.pack(side="left", before=self.slider,
-                              padx=(0, px(6)))
+        self.mute_button.pack(side="left", padx=(0, px(6)))
+        self.slider = Slider(self.volume_row, command=self._volume)
+        self.slider.pack(side="left", fill="x", expand=True)
+        self.percent = tk.Label(self.volume_row, text="", bg=CARD, fg=DIM,
+                                font=(UI, 8), width=4, anchor="e")
+        self.percent.pack(side="right", padx=(px(8), 0))
 
         self.sync_row = tk.Frame(self, bg=CARD)
         tk.Label(self.sync_row, text="delay", bg=CARD, fg=FAINT, font=(UI, 8),
@@ -462,9 +546,16 @@ class DeviceRow(tk.Frame):
             Tooltip(self.retry_button, "Retry connecting this device."),
             Tooltip(self.test_button, self._test_tooltip),
         ]
+        for widget in (self.toggle, self.slider, self.mute_button, self.sync,
+                       self.retry_button, self.test_button):
+            widget.bind(
+                "<FocusIn>",
+                lambda _event, row=self: row.app._ensure_device_visible(row),
+                add="+",
+            )
 
         self.spacer = tk.Frame(self, bg=CARD, height=px(10))
-        self.spacer.pack(fill="x")
+        self.spacer.pack(fill="x", padx=px(10))
 
     def _toggled(self, on: bool) -> None:
         self.app.set_selected(self.device.id, on)
@@ -570,13 +661,17 @@ class DeviceRow(tk.Frame):
             self.retry_button.configure(text="Retry", state="normal")
 
 
-class AddDeviceButton(tk.Frame):
+class AddDeviceButton(RoundedFrame):
     """The obvious way to bring another pair of headphones into the list."""
 
     def __init__(self, master, command):
-        super().__init__(master, bg=CARD, highlightbackground=EDGE,
-                         highlightthickness=1, cursor="hand2")
+        super().__init__(master, fill=CARD, border=EDGE, corner_bg=SURFACE,
+                         radius=px(10), cursor="hand2", takefocus=True)
         self.command = command
+        self.bind("<KeyPress-space>", self._keyboard_activate)
+        self.bind("<KeyPress-Return>", self._keyboard_activate)
+        self.bind("<FocusIn>", lambda _event: self.set_border(ACCENT), add="+")
+        self.bind("<FocusOut>", lambda _event: self.set_border(EDGE), add="+")
         inner = tk.Frame(self, bg=CARD)
         inner.pack(fill="x", padx=px(14), pady=px(9))
         icon_size = px(22)
@@ -599,8 +694,13 @@ class AddDeviceButton(tk.Frame):
             widget.bind("<Leave>", lambda e: self._tint(CARD))
 
     def _tint(self, colour: str) -> None:
-        for widget in self._parts:
+        self.set_fill(colour)
+        for widget in self._parts[1:]:
             widget.configure(bg=colour)
+
+    def _keyboard_activate(self, _event=None):
+        self.command()
+        return "break"
 
 
 class Worker(threading.Thread):
@@ -809,8 +909,8 @@ class App(tk.Tk):
         self.subtitle.pack(fill="x", pady=(px(2), px(14)))
 
         self._caption(outer, "PLAYING FROM")
-        source_card = tk.Frame(outer, bg=CARD, highlightbackground=EDGE,
-                               highlightthickness=1)
+        source_card = RoundedFrame(outer, fill=CARD, border=EDGE,
+                                  corner_bg=SURFACE, radius=px(10))
         source_card.pack(fill="x", pady=(px(6), px(14)))
         inner = tk.Frame(source_card, bg=CARD)
         inner.pack(fill="x", padx=px(14), pady=px(10))
@@ -818,9 +918,14 @@ class App(tk.Tk):
                                      font=(UI, 10), anchor="w")
         self.source_label.pack(side="left", fill="x", expand=True)
         self.change = tk.Label(inner, text="Change", bg=CARD, fg=ACCENT_FG,
-                               font=(UI, 9), cursor="hand2")
+                               font=(UI, 9), cursor="hand2", takefocus=True,
+                               highlightthickness=1,
+                               highlightbackground=CARD,
+                               highlightcolor=ACCENT)
         self.change.pack(side="right")
         self.change.bind("<Button-1>", self._choose_source)
+        self.change.bind("<KeyPress-Return>", self._choose_source_key)
+        self.change.bind("<KeyPress-space>", self._choose_source_key)
         self._source_tooltip = Tooltip(
             self.change, "Choose which Windows output device Seblue shares audio from.")
 
@@ -831,15 +936,17 @@ class App(tk.Tk):
         self.status = tk.Label(outer, text="", bg=SURFACE, fg=DIM, font=(UI, 8),
                                anchor="w", justify="left")
         self.status.pack(side="bottom", fill="x", pady=(px(9), 0))
-        footer = tk.Frame(outer, bg=BG)
-        footer.pack(side="bottom", fill="x", pady=(px(12), 0))
+        footer = tk.Frame(outer, bg=SURFACE)
+        footer.pack(side="bottom", fill="x")
+        tk.Frame(footer, bg=EDGE, height=px(1)).pack(
+            fill="x", pady=(0, px(12)))
         AddDeviceButton(footer, self._open_bluetooth).pack(fill="x")
 
-        holder = tk.Frame(outer, bg=BG)
+        holder = tk.Frame(outer, bg=SURFACE)
         holder.pack(fill="both", expand=True, pady=(px(6), 0))
-        self.canvas = tk.Canvas(holder, bg=BG, highlightthickness=0, bd=0)
+        self.canvas = tk.Canvas(holder, bg=SURFACE, highlightthickness=0, bd=0)
         self.canvas.pack(side="left", fill="both", expand=True)
-        self.list = tk.Frame(self.canvas, bg=BG)
+        self.list = tk.Frame(self.canvas, bg=SURFACE)
         self._window = self.canvas.create_window((0, 0), window=self.list, anchor="nw")
         self.list.bind("<Configure>", lambda e: self.canvas.configure(
             scrollregion=self.canvas.bbox("all")))
@@ -1211,6 +1318,10 @@ class App(tk.Tk):
 
     # -- source picker -----------------------------------------------------
 
+    def _choose_source_key(self, event=None):
+        self._choose_source(event)
+        return "break"
+
     def _choose_source(self, _event) -> None:
         menu = tk.Menu(self, tearoff=0, bg=CARD, fg=TEXT, bd=0,
                        activebackground=ACCENT, activeforeground=ACCENT_INK,
@@ -1224,6 +1335,33 @@ class App(tk.Tk):
                          command=lambda: os.startfile("ms-settings:sound"))
         menu.tk_popup(self.change.winfo_rootx(),
                       self.change.winfo_rooty() + self.change.winfo_height() + px(4))
+
+    def _ensure_device_visible(self, row: DeviceRow) -> None:
+        def scroll_into_view():
+            try:
+                if not row.winfo_exists():
+                    return
+                top = self.canvas.canvasy(
+                    row.winfo_rooty() - self.canvas.winfo_rooty())
+                bottom = top + row.winfo_height()
+                visible_top = self.canvas.canvasy(0)
+                visible_bottom = visible_top + self.canvas.winfo_height()
+                bounds = self.canvas.bbox("all")
+                if not bounds:
+                    return
+                content_height = max(1, bounds[3] - bounds[1])
+                target = visible_top
+                if top < visible_top:
+                    target = top
+                elif bottom > visible_bottom:
+                    target = bottom - self.canvas.winfo_height()
+                else:
+                    return
+                self.canvas.yview_moveto(max(0.0, target / content_height))
+            except Exception:
+                pass
+
+        self.after_idle(scroll_into_view)
 
     def _set_source(self, device) -> None:
         if not ep.set_default_id(device.id):

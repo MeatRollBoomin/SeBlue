@@ -42,9 +42,12 @@ setting anywhere to change that. Seblue adds the missing one.
 8. The window follows Windows **light/dark mode and accent colour**, and uses
    the **Mica** backdrop on Windows 11.
 
-Use **Tab** to focus a device switch and **Space** or **Enter** to toggle it.
-If a selected device cannot connect, use its **Retry** action after resolving
-the issue. Other active devices keep playing while that device retries.
+Use **Tab** and **Shift+Tab** to move through controls. **Space** or **Enter**
+activates switches and buttons. Focus a volume or delay slider and use the arrow
+keys for small adjustments, **Page Up/Down** for larger changes, or **Home/End**
+for minimum/maximum. Focused devices scroll into view automatically. If a
+selected device cannot connect, use its **Retry** action after resolving the
+issue. Other active devices keep playing while that device retries.
 
 There is nothing to start or stop. Flip a switch on and audio follows; flip it
 off and it stops. Your choices and volumes are remembered for next time.
