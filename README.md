@@ -36,6 +36,8 @@ setting anywhere to change that. Multi-Blu adds the missing one.
    others (see [Getting them in sync](#getting-them-in-sync)).
 5. **+ Add a Bluetooth device** opens Windows Bluetooth pairing. Once a device
    connects it appears in the list on its own — no restart needed.
+6. The window follows Windows **light/dark mode and accent colour**, and uses
+   the **Mica** backdrop on Windows 11.
 
 There is nothing to start or stop. Flip a switch on and audio follows; flip it
 off and it stops. Your choices and volumes are remembered for next time.
@@ -115,22 +117,27 @@ no audio hardware:
 
 ```bash
 python tests/test_fanout.py
+python tests/test_theme.py
 ```
 
 Build the standalone executable:
 
 ```bash
 pip install pyinstaller
-python -m PyInstaller --noconfirm --onefile --windowed --name "Multi-Blu" --icon "assets/multiblu.ico" --hidden-import comtypes.stream "Multi-Blu.pyw"
+python -m PyInstaller --noconfirm --clean Multi-Blu.spec
 ```
+
+The result is `dist/Multi-Blu.exe`; PyInstaller's work files stay in `build/`.
 
 ## Layout
 
     multiblu/endpoints.py   Core Audio: device list, default device, per-device volume
     multiblu/engine.py      loopback capture, ring buffers, drift, alignment, fan-out
     multiblu/app.py         the window
+    multiblu/theme.py       Windows palette, accent, and Mica backdrop
     tools/make_icon.py      regenerates assets/multiblu.ico
     tests/test_fanout.py    offline checks, no hardware needed
+    tests/test_theme.py     palette and accent checks, no hardware needed
 
 ## Troubleshooting
 

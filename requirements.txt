@@ -2,3 +2,4 @@ numpy
 comtypes
 pycaw
 PyAudioWPatch
+Pillow

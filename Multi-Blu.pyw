@@ -16,6 +16,7 @@ REQUIREMENTS = {
     "comtypes": "comtypes",
     "pycaw": "pycaw",
     "pyaudiowpatch": "PyAudioWPatch",
+    "PIL": "Pillow",
 }
 
 

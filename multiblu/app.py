@@ -14,24 +14,35 @@ import ctypes
 import json
 import os
 import queue
+import sys
 import threading
 import tkinter as tk
 from pathlib import Path
+from PIL import Image, ImageTk
 
 from . import endpoints as ep
+from . import theme as th
 from .engine import Engine
+from .theme import blend as _blend
 
-BG = "#0B0C0F"
-CARD = "#15171C"
-HOVER = "#1C2027"
-EDGE = "#22252D"
-TEXT = "#EDEEF2"
-DIM = "#767D8B"
-FAINT = "#4A505C"
-ACCENT = "#3ED598"
-TRACK = "#2A2E37"
-KNOB = "#FFFFFF"
-DANGER = "#F2777A"
+_PALETTE = th.palette_for(True, th.DEFAULT_ACCENT)
+BG = _PALETTE["bg"]
+CARD = _PALETTE["card"]
+HOVER = _PALETTE["hover"]
+EDGE = _PALETTE["edge"]
+TEXT = _PALETTE["text"]
+DIM = _PALETTE["dim"]
+FAINT = _PALETTE["faint"]
+ACCENT = _PALETTE["accent"]
+ACCENT_FG = _PALETTE["accent_fg"]
+ACCENT_INK = _PALETTE["accent_ink"]
+TRACK = _PALETTE["track"]
+KNOB = _PALETTE["knob"]
+DANGER = _PALETTE["danger"]
+
+GLASS_KEYS = {True: "#010203", False: "#F2F2F3"}
+MAGIC = GLASS_KEYS[True]
+SURFACE = BG
 
 UI = "Segoe UI"
 SETTINGS = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Multi-Blu" / "settings.json"
@@ -39,6 +50,16 @@ SCAN_MS = 1500
 MAX_DELAY = 0.30        # seconds of hand-tuned sync nudge per device
 
 SCALE = 1.0
+
+
+def _set_palette(theme: th.Theme) -> None:
+    palette = theme.palette()
+    for field in ("bg", "card", "hover", "edge", "text", "dim", "faint",
+                  "track", "knob", "danger"):
+        globals()[field.upper()] = palette[field]
+    globals()["ACCENT"] = palette["accent"]
+    globals()["ACCENT_FG"] = palette["accent_fg"]
+    globals()["ACCENT_INK"] = palette["accent_ink"]
 
 
 def px(value: float) -> int:
@@ -61,54 +82,12 @@ def _enable_dpi() -> None:
         SCALE = 1.0
 
 
-def _colorref(hex_colour: str) -> int:
-    """#RRGGBB -> Win32 COLORREF, which orders the bytes 0x00BBGGRR."""
-    r, g, b = (int(hex_colour[i:i + 2], 16) for i in (1, 3, 5))
-    return (b << 16) | (g << 8) | r
-
-
-def _dark_titlebar(window) -> None:
-    """Paint the title bar to match the window.
-
-    Dark mode alone is not enough: with "show accent colour on title bars" on,
-    Windows repaints the caption in the user's accent colour, so the caption and
-    border colours are set explicitly too (Windows 11 22000+).
-    """
-    try:
-        window.update_idletasks()
-        hwnd = ctypes.windll.user32.GetParent(window.winfo_id())
-        dwm = ctypes.windll.dwmapi
-
-        def apply(attribute, value):
-            data = ctypes.c_int(value)
-            return dwm.DwmSetWindowAttribute(hwnd, attribute, ctypes.byref(data),
-                                             ctypes.sizeof(data))
-
-        for attribute in (20, 19):      # DWMWA_USE_IMMERSIVE_DARK_MODE, then legacy
-            if apply(attribute, 1) == 0:
-                break
-        apply(34, _colorref(EDGE))      # DWMWA_BORDER_COLOR
-        apply(35, _colorref(BG))        # DWMWA_CAPTION_COLOR
-        apply(36, _colorref(TEXT))      # DWMWA_TEXT_COLOR
-    except Exception:
-        pass
-
-
-def _blend(a: str, b: str, t: float) -> str:
-    t = max(0.0, min(1.0, t))
-    ar, ag, ab = int(a[1:3], 16), int(a[3:5], 16), int(a[5:7], 16)
-    br, bg_, bb = int(b[1:3], 16), int(b[3:5], 16), int(b[5:7], 16)
-    return "#%02x%02x%02x" % (
-        round(ar + (br - ar) * t),
-        round(ag + (bg_ - ag) * t),
-        round(ab + (bb - ab) * t),
-    )
-
-
 class Toggle(tk.Canvas):
     """A pill switch that animates between off and on."""
 
-    def __init__(self, master, command=None, bg=CARD):
+    def __init__(self, master, command=None, bg=None):
+        if bg is None:
+            bg = CARD
         self.w, self.h, self.pad = px(44), px(24), px(3)
         super().__init__(master, width=self.w, height=self.h, bg=bg,
                          highlightthickness=0, bd=0, cursor="hand2")
@@ -147,6 +126,15 @@ class Toggle(tk.Canvas):
 
         tick()
 
+    def destroy(self) -> None:
+        if self._job:
+            try:
+                self.after_cancel(self._job)
+            except Exception:
+                pass
+            self._job = None
+        super().destroy()
+
     def _render(self) -> None:
         self.delete("all")
         r = (self.h - 2 * self.pad) / 2
@@ -166,7 +154,9 @@ class Toggle(tk.Canvas):
 class Slider(tk.Canvas):
     """Thin volume slider, grabbed anywhere along its length."""
 
-    def __init__(self, master, command=None, bg=CARD):
+    def __init__(self, master, command=None, bg=None):
+        if bg is None:
+            bg = CARD
         self.h, self.knob = px(20), px(6)
         super().__init__(master, width=px(150), height=self.h, bg=bg,
                          highlightthickness=0, bd=0, cursor="hand2")
@@ -292,18 +282,57 @@ class AddDeviceButton(tk.Frame):
         self.command = command
         inner = tk.Frame(self, bg=CARD)
         inner.pack(fill="x", padx=px(14), pady=px(9))
-        plus = tk.Label(inner, text="+", bg=CARD, fg=ACCENT, font=(UI, 14, "bold"))
-        plus.pack(side="left", padx=(0, px(10)))
-        caption = tk.Label(inner, text="Add a Bluetooth device", bg=CARD, fg=ACCENT,
+        icon_size = px(22)
+        icon = self._load_icon(inner, icon_size)
+        icon.pack(side="left", padx=(0, px(10)))
+        caption = tk.Label(inner, text="Add a Bluetooth device", bg=CARD, fg=ACCENT_FG,
                            font=(UI, 10), anchor="w")
         caption.pack(side="left", fill="x", expand=True)
 
-        self._parts = (self, inner, plus, caption)
+        self._parts = (self, inner, icon, caption)
         for widget in self._parts:
             widget.configure(cursor="hand2")
             widget.bind("<Button-1>", lambda e: self.command())
             widget.bind("<Enter>", lambda e: self._tint(HOVER))
             widget.bind("<Leave>", lambda e: self._tint(CARD))
+
+    def _load_icon(self, master, size: int):
+        filename = "plus-sign-circle-stroke-rounded.png"
+        roots = []
+        bundle_dir = getattr(sys, "_MEIPASS", None)
+        if bundle_dir:
+            roots.append(Path(bundle_dir))
+        if getattr(sys, "frozen", False):
+            roots.append(Path(sys.executable).resolve().parent)
+        roots.append(Path(__file__).resolve().parents[1])
+
+        for root in roots:
+            path = root / "assets" / filename
+            try:
+                source = Image.open(path).convert("RGBA")
+                tint = Image.new("RGBA", source.size, ACCENT_FG)
+                tint.putalpha(source.getchannel("A"))
+                resampling = getattr(Image, "Resampling", Image)
+                tint = tint.resize((size, size), resampling.LANCZOS)
+                self.icon_image = ImageTk.PhotoImage(tint)
+                return tk.Label(master, image=self.icon_image, bg=CARD, bd=0)
+            except OSError:
+                continue
+
+        # Keep startup usable if a packaged or source asset is missing.
+        icon = tk.Canvas(master, width=size, height=size, bg=CARD,
+                         highlightthickness=0, bd=0)
+        inset = px(2)
+        center = size / 2
+        stroke = max(1, px(1.5))
+        icon.create_oval(inset, inset, size - inset, size - inset,
+                         outline=ACCENT_FG, width=stroke)
+        arm = px(4)
+        icon.create_line(center - arm, center, center + arm, center,
+                         fill=ACCENT_FG, width=stroke, capstyle=tk.ROUND)
+        icon.create_line(center, center - arm, center, center + arm,
+                         fill=ACCENT_FG, width=stroke, capstyle=tk.ROUND)
+        return icon
 
     def _tint(self, colour: str) -> None:
         for widget in self._parts:
@@ -354,11 +383,21 @@ class Worker(threading.Thread):
 
 
 class App(tk.Tk):
-    def __init__(self):
+    def __init__(self, theme: th.Theme | None = None):
+        global SURFACE
         super().__init__()
         ep.com_init()
+
+        self._theme = theme or th.read_theme()
+        _set_palette(self._theme)
+        self._mica_failed = False
+        self._glass = bool(self._theme.transparency and th.mica_supported())
+        key = GLASS_KEYS[self._theme.dark]
+        SURFACE = key if self._glass else BG
+
         self.title("Multi-Blu")
-        self.configure(bg=BG)
+        self.configure(bg=SURFACE)
+        self.wm_attributes("-transparentcolor", key if self._glass else "")
         self.geometry("%dx%d" % (px(430), px(560)))
         self.minsize(px(380), px(440))
 
@@ -375,24 +414,29 @@ class App(tk.Tk):
         self._signature = None
         self._report = None
         self._scan_job = None
+        self._theme_job = None
 
         self._build()
-        _dark_titlebar(self)
+        self._apply_window_theme(rebuild=False)
         self._load_settings()
         self.protocol("WM_DELETE_WINDOW", self._close)
+        self.bind_all("<MouseWheel>", self._wheel)
+        self.bind("<Map>", self._mapped)
         self._scan()
         self._drain()
+        self._theme_job = self.after(1500, self._watch_theme)
 
     # -- layout ------------------------------------------------------------
 
     def _build(self) -> None:
-        outer = tk.Frame(self, bg=BG)
+        outer = tk.Frame(self, bg=SURFACE)
         outer.pack(fill="both", expand=True, padx=px(18), pady=px(16))
 
-        tk.Label(outer, text="Multi-Blu", bg=BG, fg=TEXT,
+        tk.Label(outer, text="Multi-Blu", bg=SURFACE, fg=TEXT,
                  font=(UI, 17, "bold"), anchor="w").pack(fill="x")
         self.subtitle = tk.Label(outer, text="Play your audio on several headphones at once",
-                                 bg=BG, fg=DIM, font=(UI, 9), anchor="w", justify="left")
+                                 bg=SURFACE, fg=DIM, font=(UI, 9), anchor="w",
+                                 justify="left")
         self.subtitle.pack(fill="x", pady=(px(2), px(14)))
 
         self._caption(outer, "PLAYING FROM")
@@ -404,7 +448,7 @@ class App(tk.Tk):
         self.source_label = tk.Label(inner, text="Looking...", bg=CARD, fg=TEXT,
                                      font=(UI, 10), anchor="w")
         self.source_label.pack(side="left", fill="x", expand=True)
-        self.change = tk.Label(inner, text="Change", bg=CARD, fg=ACCENT,
+        self.change = tk.Label(inner, text="Change", bg=CARD, fg=ACCENT_FG,
                                font=(UI, 9), cursor="hand2")
         self.change.pack(side="right")
         self.change.bind("<Button-1>", self._choose_source)
@@ -413,12 +457,12 @@ class App(tk.Tk):
 
         # Footer is packed before the list so a long list can never push the
         # add button and status off the bottom of the window.
+        self.status = tk.Label(outer, text="", bg=SURFACE, fg=DIM, font=(UI, 8),
+                               anchor="w", justify="left")
+        self.status.pack(side="bottom", fill="x", pady=(px(9), 0))
         footer = tk.Frame(outer, bg=BG)
         footer.pack(side="bottom", fill="x", pady=(px(12), 0))
         AddDeviceButton(footer, self._open_bluetooth).pack(fill="x")
-        self.status = tk.Label(footer, text="", bg=BG, fg=DIM, font=(UI, 8),
-                               anchor="w", justify="left")
-        self.status.pack(fill="x", pady=(px(9), 0))
 
         holder = tk.Frame(outer, bg=BG)
         holder.pack(fill="both", expand=True, pady=(px(6), 0))
@@ -430,12 +474,74 @@ class App(tk.Tk):
             scrollregion=self.canvas.bbox("all")))
         self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(
             self._window, width=e.width))
-        self.bind_all("<MouseWheel>", self._wheel)
         self.bind("<Configure>", self._rewrap)
 
     def _caption(self, parent, text: str) -> None:
-        tk.Label(parent, text=text, bg=BG, fg=FAINT, font=(UI, 8, "bold"),
+        tk.Label(parent, text=text, bg=SURFACE, fg=FAINT, font=(UI, 8, "bold"),
                  anchor="w").pack(fill="x")
+
+    # -- theme -------------------------------------------------------------
+
+    def _apply_window_theme(self, rebuild: bool = True) -> None:
+        global MAGIC, SURFACE
+        _set_palette(self._theme)
+
+        glass = bool(self._theme.transparency and th.mica_supported()
+                     and not self._mica_failed)
+        if glass:
+            glass = th.apply_mica(self, self._theme.dark)
+            if not glass:
+                self._mica_failed = True
+        self._glass = glass
+
+        MAGIC = GLASS_KEYS[self._theme.dark]
+        new_surface = MAGIC if glass else BG
+        changed = new_surface != SURFACE
+        SURFACE = new_surface
+        self.wm_attributes("-transparentcolor", MAGIC if glass else "")
+        self.configure(bg=SURFACE)
+        th.style_titlebar(self, self._theme.dark, BG, EDGE, TEXT)
+
+        if rebuild or changed:
+            self._rebuild_ui()
+
+    def _rebuild_ui(self) -> None:
+        position = 0.0
+        try:
+            position = self.canvas.yview()[0]
+        except Exception:
+            pass
+
+        for child in self.winfo_children():
+            child.destroy()
+        self.rows = {}
+        self._build()
+        self._rebuild_rows()
+        self._paint_notes()
+        self._paint_status()
+        if position:
+            try:
+                self.canvas.yview_moveto(position)
+            except Exception:
+                pass
+
+    def _watch_theme(self) -> None:
+        theme = th.read_theme()
+        if theme.state() != self._theme.state():
+            if theme.transparency and not self._theme.transparency:
+                self._mica_failed = False
+            self._theme = theme
+            self._apply_window_theme()
+        self._theme_job = self.after(1500, self._watch_theme)
+
+    def _mapped(self, event) -> None:
+        if event.widget is self and self._glass:
+            self.after_idle(self._reapply_glass)
+
+    def _reapply_glass(self) -> None:
+        if self._glass:
+            th.apply_mica(self, self._theme.dark)
+            th.style_titlebar(self, self._theme.dark, BG, EDGE, TEXT)
 
     def _rewrap(self, event) -> None:
         if event.widget is self:
@@ -573,7 +679,7 @@ class App(tk.Tk):
             others = "1 other device" if count == 1 else "%d other devices" % count
             self.status.configure(
                 text="Playing to %s alongside %s." % (others, report.get("source", "you")),
-                fg=ACCENT)
+                fg=ACCENT_FG)
         elif count:
             self.status.configure(
                 text="Playing to %d, but %d could not be opened." % (count, broken),
@@ -588,7 +694,8 @@ class App(tk.Tk):
 
     def _choose_source(self, _event) -> None:
         menu = tk.Menu(self, tearoff=0, bg=CARD, fg=TEXT, bd=0,
-                       activebackground=ACCENT, activeforeground=BG, font=(UI, 9))
+                       activebackground=ACCENT, activeforeground=ACCENT_INK,
+                       font=(UI, 9))
         for device in self.devices:
             mark = "• " if device is self.source else "    "
             menu.add_command(label=mark + device.name,
@@ -646,11 +753,12 @@ class App(tk.Tk):
             pass
 
     def _close(self) -> None:
-        if self._scan_job is not None:
-            try:
-                self.after_cancel(self._scan_job)
-            except Exception:
-                pass
+        for job in (self._scan_job, self._theme_job):
+            if job is not None:
+                try:
+                    self.after_cancel(job)
+                except Exception:
+                    pass
         self.worker.shutdown()
         try:
             self.engine.stop()

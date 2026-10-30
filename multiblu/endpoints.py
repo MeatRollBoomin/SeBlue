@@ -191,22 +191,36 @@ def match_index(endpoint_name: str, candidates: dict[int, str]) -> int | None:
 
     PortAudio reports the same friendly names but mangles non-ASCII characters
     and truncates long ones, so fall back from exact to prefix to fuzzy match.
+    Ambiguous matches are rejected rather than routing audio to an arbitrary
+    device when two endpoints have the same or similar friendly names.
     """
     want = _normalise(endpoint_name)
     if not want:
         return None
     norm = {idx: _normalise(nm) for idx, nm in candidates.items()}
 
-    for idx, got in norm.items():
-        if got == want:
-            return idx
-    for idx, got in norm.items():
-        if got and (got.startswith(want) or want.startswith(got)):
-            return idx
+    exact = [idx for idx, got in norm.items() if got == want]
+    if len(exact) == 1:
+        return exact[0]
+    if exact:
+        return None
 
-    best, best_score = None, 0.0
-    for idx, got in norm.items():
-        score = difflib.SequenceMatcher(None, want, got).ratio()
-        if score > best_score:
-            best, best_score = idx, score
-    return best if best_score >= 0.80 else None
+    prefix = [idx for idx, got in norm.items()
+              if got and (got.startswith(want) or want.startswith(got))]
+    if len(prefix) == 1:
+        return prefix[0]
+    if prefix:
+        return None
+
+    scored = sorted(
+        ((difflib.SequenceMatcher(None, want, got).ratio(), idx)
+         for idx, got in norm.items() if got),
+        reverse=True,
+    )
+    if not scored or scored[0][0] < 0.80:
+        return None
+    # Require a meaningful lead over the runner-up; tiny score differences are
+    # not reliable enough to distinguish similar product names.
+    if len(scored) > 1 and scored[0][0] - scored[1][0] < 0.08:
+        return None
+    return scored[0][1]
