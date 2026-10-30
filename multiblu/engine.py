@@ -172,6 +172,10 @@ class Listener:
     wants_growth: bool = False
     error: str = ""
     _last: np.ndarray = field(default=None, repr=False)
+    _test_clip: np.ndarray = field(default=None, repr=False)
+    _test_pos: int = field(default=0, repr=False)
+    _test_paused: bool = field(default=False, repr=False)
+    _test_lock: object = field(default_factory=threading.Lock, repr=False)
 
     @property
     def target(self) -> int:
@@ -183,6 +187,19 @@ class Listener:
         if self.resampler is not None:
             block = self.resampler.process(block)
         self.ring.write(_remap_channels(block, self.channels))
+
+    def set_test_clip(self, clip: np.ndarray) -> None:
+        with self._test_lock:
+            self._test_clip = clip
+            self._test_pos = 0
+            self._test_paused = False
+
+    def toggle_test_clip(self):
+        with self._test_lock:
+            if self._test_clip is None:
+                return None
+            self._test_paused = not self._test_paused
+            return "paused" if self._test_paused else "playing"
 
     def pull(self, frames: int) -> np.ndarray:
         ring = self.ring
@@ -220,6 +237,19 @@ class Listener:
             data = data * ramp[:, None].astype(np.float32)
         if self.gain != 1.0:
             data = data * np.float32(self.gain)
+
+        with self._test_lock:
+            clip = self._test_clip
+            if clip is not None and not self._test_paused:
+                count = min(frames, len(clip) - self._test_pos)
+                if count > 0:
+                    data[:count] += clip[self._test_pos:self._test_pos + count]
+                    np.clip(data, -1.0, 1.0, out=data)
+                    self._test_pos += count
+                if self._test_pos >= len(clip):
+                    self._test_clip = None
+                    self._test_pos = 0
+                    self._test_paused = False
 
         self._last = data[-1:].copy()
         return data
@@ -438,6 +468,84 @@ class Engine:
                 listener.stream = stream
                 return          # started once capture is live, so it never starts starved
         raise RuntimeError(str(last) if last else "device refused every format")
+
+    def retry_listener(self, key: str, name: str):
+        """Open one failed listener without restarting the active audio session."""
+        with self._lock:
+            if key in self._listeners:
+                return "ok", ""
+            if not self.running or self._pa is None:
+                return "restart", ""
+
+            try:
+                devices = self._render_map(self._pa)
+            except Exception:
+                return "missing", "Device is not reachable."
+            index = match_index(name, devices)
+            if index is None:
+                return "missing", "Device is not reachable."
+
+            listener = Listener(key=key, name=name, pa_index=index)
+            try:
+                self._open_listener(self._pa, listener)
+            except Exception as exc:
+                listener.error = str(exc)
+                return "failed", listener.error
+
+            try:
+                listener.latency = float(listener.stream.get_output_latency())
+            except Exception:
+                listener.latency = 0.0
+
+            # Line up the new stream with the latest current listener while
+            # leaving all already-playing streams and their buffers untouched.
+            latest = max(
+                l.latency + (l.align + l.user_delay) / l.rate
+                for l in self._listeners.values()
+            )
+            listener.user_delay = max(
+                0, int(self.delays.get(key, 0.0) * listener.rate))
+            listener.align = max(
+                0, int((latest - listener.latency
+                        - listener.user_delay / listener.rate) * listener.rate))
+            listener.ring.write(np.zeros(
+                (listener.target, listener.channels), dtype=np.float32))
+            self._listeners[key] = listener
+            try:
+                listener.stream.start_stream()
+            except Exception as exc:
+                self._listeners.pop(key, None)
+                try:
+                    listener.stream.close()
+                except Exception:
+                    pass
+                return "failed", str(exc)
+            return "ok", ""
+
+    def play_test_sound(self, key: str, samples, channels: int,
+                        sample_rate: int) -> float:
+        """Queue a short test clip on one active listener and return its duration."""
+        with self._lock:
+            listener = self._listeners.get(key)
+        if listener is None or listener.rate <= 0 or sample_rate <= 0:
+            return 0.0
+
+        clip = np.asarray(samples, dtype=np.float32).reshape(-1, channels).copy()
+        if sample_rate != listener.rate:
+            clip = _Resampler(listener.rate / sample_rate).process(clip)
+        clip = _remap_channels(clip, listener.channels) * np.float32(0.25)
+
+        with self._lock:
+            if self._listeners.get(key) is not listener:
+                return 0.0
+            listener.set_test_clip(clip)
+        return len(clip) / listener.rate
+
+    def toggle_test_sound(self, key: str):
+        """Pause or resume a test clip for one listener, if one is queued."""
+        with self._lock:
+            listener = self._listeners.get(key)
+        return listener.toggle_test_clip() if listener is not None else None
 
     def _open_silence(self, p, device_index: int):
         """Open a stream that renders silence, used to keep the source awake."""

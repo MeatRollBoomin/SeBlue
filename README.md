@@ -34,10 +34,15 @@ setting anywhere to change that. Multi-Blu adds the missing one.
    listen at different levels — something Windows cannot do at all.
 4. Each device also gets a **delay** slider, to line it up by ear with the
    others (see [Getting them in sync](#getting-them-in-sync)).
-5. **+ Add a Bluetooth device** opens Windows Bluetooth pairing. Once a device
+5. **Test sound** plays the bundled Sony DTS clip through that selected device.
+6. **+ Add a Bluetooth device** opens Windows Bluetooth pairing. Once a device
    connects it appears in the list on its own — no restart needed.
-6. The window follows Windows **light/dark mode and accent colour**, and uses
+7. The window follows Windows **light/dark mode and accent colour**, and uses
    the **Mica** backdrop on Windows 11.
+
+Use **Tab** to focus a device switch and **Space** or **Enter** to toggle it.
+If a selected device cannot connect, use its **Retry** action after resolving
+the issue. Other active devices keep playing while that device retries.
 
 There is nothing to start or stop. Flip a switch on and audio follows; flip it
 off and it stops. Your choices and volumes are remembered for next time.
@@ -153,3 +158,5 @@ The result is `dist/Multi-Blu.exe`; PyInstaller's work files stay in `build/`.
 ## Licence
 
 MIT
+
+The device icons use Font Awesome Free, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).

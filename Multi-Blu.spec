@@ -1,13 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from tkinter_icons import get_hook_dirs
+from PyInstaller.utils.hooks import collect_all
+
+miniaudio_datas, miniaudio_binaries, miniaudio_hiddenimports = collect_all('miniaudio')
+cffi_datas, cffi_binaries, cffi_hiddenimports = collect_all('cffi')
 
 a = Analysis(
     ['Multi-Blu.pyw'],
     pathex=[],
-    binaries=[],
-    datas=[('assets/plus-sign-circle-stroke-rounded.png', 'assets')],
-    hiddenimports=['comtypes.stream'],
-    hookspath=[],
+    binaries=miniaudio_binaries + cffi_binaries,
+    datas=[('assets/Sony-DTS-Sound.mp3', 'assets')] + miniaudio_datas + cffi_datas,
+    hiddenimports=(['comtypes.stream'] + miniaudio_hiddenimports
+                   + cffi_hiddenimports + ['_cffi_backend']),
+    hookspath=get_hook_dirs(),
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],

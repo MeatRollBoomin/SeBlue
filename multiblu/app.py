@@ -16,9 +16,17 @@ import os
 import queue
 import sys
 import threading
+import time
 import tkinter as tk
 from pathlib import Path
-from PIL import Image, ImageTk
+from tkinter_icons import FontAwesomeIcon
+
+try:
+    import miniaudio
+    _MINIAUDIO_IMPORT_ERROR = ""
+except ImportError as exc:
+    miniaudio = None
+    _MINIAUDIO_IMPORT_ERROR = str(exc)
 
 from . import endpoints as ep
 from . import theme as th
@@ -46,10 +54,51 @@ SURFACE = BG
 
 UI = "Segoe UI"
 SETTINGS = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Multi-Blu" / "settings.json"
+APP_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
+TEST_SOUND = APP_ROOT / "assets" / "Sony-DTS-Sound.mp3"
 SCAN_MS = 1500
 MAX_DELAY = 0.30        # seconds of hand-tuned sync nudge per device
 
 SCALE = 1.0
+_DEVICE_ICONS = {}
+
+
+def _device_info(device_name: str) -> tuple[str, str]:
+    """Return an icon and a conservative type label from the friendly name."""
+    name = device_name.casefold()
+    if any(word in name for word in ("headphone", "headset", "earbud", "airpod")):
+        return "headphones", "Headphones"
+    if any(word in name for word in ("phone", "mobile", "iphone", "ipad", "tablet",
+                                     "pixel", "galaxy")):
+        return "mobile-screen-button", "Mobile device"
+    if any(word in name for word in ("laptop", "notebook", "macbook", "pc")):
+        return "laptop", "Laptop"
+    return "volume-high", "Audio device"
+
+
+def _fontawesome_image(icon_name: str, size: int, color: str):
+    key = (icon_name, color, size)
+    image = _DEVICE_ICONS.get(key)
+    if image is None:
+        image = FontAwesomeIcon(icon_name, size=size, color=color).image
+        _DEVICE_ICONS[key] = image
+    return image
+
+
+def _image_with_left_gap(master, image, gap: int):
+    """Add transparent space before an icon without indenting button text."""
+    padded = tk.PhotoImage(master=master, width=image.width() + gap,
+                           height=image.height())
+    padded.tk.call(str(padded), "copy", str(image), "-to", gap, 0)
+    return padded
+
+
+def _make_device_icon(master, device_name: str):
+    """Create a themed Font Awesome icon for the endpoint."""
+    size = px(20)
+    icon_name, _device_type = _device_info(device_name)
+    image = _fontawesome_image(icon_name, size, ACCENT_FG)
+    return tk.Label(master, image=image, bg=CARD, bd=0)
 
 
 def _set_palette(theme: th.Theme) -> None:
@@ -90,12 +139,16 @@ class Toggle(tk.Canvas):
             bg = CARD
         self.w, self.h, self.pad = px(44), px(24), px(3)
         super().__init__(master, width=self.w, height=self.h, bg=bg,
-                         highlightthickness=0, bd=0, cursor="hand2")
+                         highlightthickness=2, highlightbackground=bg,
+                         highlightcolor=ACCENT, bd=0, cursor="hand2",
+                         takefocus=True)
         self.command = command
         self.on = False
         self._t = 0.0
         self._job = None
         self.bind("<Button-1>", self._clicked)
+        self.bind("<space>", self._key_clicked)
+        self.bind("<Return>", self._key_clicked)
         self._render()
 
     def set(self, on: bool, animate: bool = True) -> None:
@@ -108,10 +161,14 @@ class Toggle(tk.Canvas):
             self._t = 1.0 if on else 0.0
             self._render()
 
-    def _clicked(self, _event) -> None:
+    def _clicked(self, _event=None) -> str:
         self.set(not self.on)
         if self.command:
             self.command(self.on)
+        return "break"
+
+    def _key_clicked(self, event) -> str:
+        return self._clicked(event)
 
     def _animate(self) -> None:
         if self._job:
@@ -206,12 +263,30 @@ class DeviceRow(tk.Frame):
         head = tk.Frame(self, bg=CARD)
         head.pack(fill="x", padx=px(14), pady=(px(10), 0))
 
+        self.device_icon = _make_device_icon(head, device.name)
+        if self.device_icon is not None:
+            self.device_icon.pack(side="left", padx=(0, px(10)))
+
         labels = tk.Frame(head, bg=CARD)
         labels.pack(side="left", fill="x", expand=True)
         self.name = tk.Label(labels, text=device.name, bg=CARD, fg=TEXT,
                              font=(UI, 10), anchor="w", justify="left")
         self.name.pack(fill="x")
-        self.note = tk.Label(labels, text="", bg=CARD, fg=FAINT, font=(UI, 8), anchor="w")
+        _icon, device_type = _device_info(device.name)
+        self.type_label = tk.Label(labels, text=device_type, bg=CARD, fg=FAINT,
+                                   font=(UI, 8), anchor="w")
+        self.type_label.pack(fill="x")
+        self.note_row = tk.Frame(labels, bg=CARD)
+        self.note = tk.Label(self.note_row, text="", bg=CARD, fg=FAINT,
+                             font=(UI, 8), anchor="w")
+        self.note.pack(side="left", fill="x", expand=True)
+        self.retry_button = tk.Button(
+            self.note_row, text="Retry", command=self._retry,
+            bg=CARD, fg=ACCENT_FG, activebackground=HOVER,
+            activeforeground=ACCENT_FG, relief="flat", bd=0,
+            highlightthickness=1, highlightbackground=CARD,
+            highlightcolor=ACCENT, font=(UI, 8), padx=px(5), pady=0,
+            cursor="hand2", takefocus=True)
 
         self.toggle = Toggle(head, command=self._toggled)
         self.toggle.pack(side="right", padx=(px(10), 0))
@@ -232,11 +307,45 @@ class DeviceRow(tk.Frame):
                                    font=(UI, 8), width=6, anchor="e")
         self.sync_value.pack(side="right", padx=(px(8), 0))
 
+        self.test_row = tk.Frame(labels, bg=CARD)
+        icon_gap = px(4)
+        self._test_play_image = _image_with_left_gap(
+            self.test_row, _fontawesome_image("play", px(11), ACCENT_FG), icon_gap)
+        self._test_pause_image = _image_with_left_gap(
+            self.test_row, _fontawesome_image("pause", px(11), ACCENT_FG), icon_gap)
+        self._test_loading_image = _image_with_left_gap(
+            self.test_row, _fontawesome_image("spinner", px(11), ACCENT_FG), icon_gap)
+        self.test_button = tk.Button(
+            self.test_row, text="Test Sound", image=self._test_play_image,
+            compound="right", command=self._test_sound,
+            bg=CARD, fg=ACCENT_FG, activebackground=HOVER,
+            activeforeground=ACCENT_FG, relief="flat", bd=0,
+            highlightthickness=1, highlightbackground=CARD,
+            highlightcolor=ACCENT, font=(UI, 8), padx=0, pady=0,
+            cursor="hand2", takefocus=True)
+        self.test_button.pack(side="left")
+
         self.spacer = tk.Frame(self, bg=CARD, height=px(10))
         self.spacer.pack(fill="x")
 
     def _toggled(self, on: bool) -> None:
         self.app.set_selected(self.device.id, on)
+
+    def _retry(self) -> None:
+        self.retry_button.configure(state="disabled", text="Retrying…")
+        self.app.retry_device(self.device.id)
+
+    def _test_sound(self) -> None:
+        self.app.test_device(self.device.id)
+
+    def set_test_button(self, mode: str) -> None:
+        if mode == "preparing":
+            self.test_button.configure(state="disabled", text="Test Sound",
+                                       image=self._test_loading_image)
+        else:
+            image = (self._test_pause_image if mode == "playing"
+                     else self._test_play_image)
+            self.test_button.configure(state="normal", text="Test Sound", image=image)
 
     def _volume(self, value: float) -> None:
         self.percent.configure(text="%d%%" % round(value * 100))
@@ -261,16 +370,26 @@ class DeviceRow(tk.Frame):
                                  before=self.spacer)
             self.sync_row.pack(fill="x", padx=px(14), pady=(px(4), 0),
                                before=self.spacer)
+            self.test_row.pack(fill="x", pady=(px(4), 0))
         else:
             self.volume_row.pack_forget()
             self.sync_row.pack_forget()
+            self.test_row.pack_forget()
 
-    def show_note(self, text: str, bad: bool = False) -> None:
+    def show_note(self, text: str, bad: bool = False, retry: bool = False) -> None:
         if text:
             self.note.configure(text=text, fg=DANGER if bad else FAINT)
-            self.note.pack(fill="x")
+            self.note_row.pack(fill="x")
+            if retry:
+                self.retry_button.configure(text="Retry", state="normal")
+                self.retry_button.pack(side="right")
+            else:
+                self.retry_button.pack_forget()
+                self.retry_button.configure(text="Retry", state="normal")
         else:
-            self.note.pack_forget()
+            self.note_row.pack_forget()
+            self.retry_button.pack_forget()
+            self.retry_button.configure(text="Retry", state="normal")
 
 
 class AddDeviceButton(tk.Frame):
@@ -283,7 +402,8 @@ class AddDeviceButton(tk.Frame):
         inner = tk.Frame(self, bg=CARD)
         inner.pack(fill="x", padx=px(14), pady=px(9))
         icon_size = px(22)
-        icon = self._load_icon(inner, icon_size)
+        self.icon_image = _fontawesome_image("circle-plus", icon_size, ACCENT_FG)
+        icon = tk.Label(inner, image=self.icon_image, bg=CARD, bd=0)
         icon.pack(side="left", padx=(0, px(10)))
         caption = tk.Label(inner, text="Add a Bluetooth device", bg=CARD, fg=ACCENT_FG,
                            font=(UI, 10), anchor="w")
@@ -296,44 +416,6 @@ class AddDeviceButton(tk.Frame):
             widget.bind("<Enter>", lambda e: self._tint(HOVER))
             widget.bind("<Leave>", lambda e: self._tint(CARD))
 
-    def _load_icon(self, master, size: int):
-        filename = "plus-sign-circle-stroke-rounded.png"
-        roots = []
-        bundle_dir = getattr(sys, "_MEIPASS", None)
-        if bundle_dir:
-            roots.append(Path(bundle_dir))
-        if getattr(sys, "frozen", False):
-            roots.append(Path(sys.executable).resolve().parent)
-        roots.append(Path(__file__).resolve().parents[1])
-
-        for root in roots:
-            path = root / "assets" / filename
-            try:
-                source = Image.open(path).convert("RGBA")
-                tint = Image.new("RGBA", source.size, ACCENT_FG)
-                tint.putalpha(source.getchannel("A"))
-                resampling = getattr(Image, "Resampling", Image)
-                tint = tint.resize((size, size), resampling.LANCZOS)
-                self.icon_image = ImageTk.PhotoImage(tint)
-                return tk.Label(master, image=self.icon_image, bg=CARD, bd=0)
-            except OSError:
-                continue
-
-        # Keep startup usable if a packaged or source asset is missing.
-        icon = tk.Canvas(master, width=size, height=size, bg=CARD,
-                         highlightthickness=0, bd=0)
-        inset = px(2)
-        center = size / 2
-        stroke = max(1, px(1.5))
-        icon.create_oval(inset, inset, size - inset, size - inset,
-                         outline=ACCENT_FG, width=stroke)
-        arm = px(4)
-        icon.create_line(center - arm, center, center + arm, center,
-                         fill=ACCENT_FG, width=stroke, capstyle=tk.ROUND)
-        icon.create_line(center, center - arm, center, center + arm,
-                         fill=ACCENT_FG, width=stroke, capstyle=tk.ROUND)
-        return icon
-
     def _tint(self, colour: str) -> None:
         for widget in self._parts:
             widget.configure(bg=colour)
@@ -342,18 +424,34 @@ class AddDeviceButton(tk.Frame):
 class Worker(threading.Thread):
     """Applies the wanted routing off the UI thread, coalescing rapid changes."""
 
-    def __init__(self, engine: Engine, results: queue.Queue):
+    def __init__(self, engine: Engine, results: queue.Queue,
+                 test_sound: Path):
         super().__init__(daemon=True)
         self.engine = engine
         self.results = results
+        self.test_sound = test_sound
         self._wake = threading.Event()
         self._wanted = None
         self._applied = object()
+        self._retry = None
+        self._test_requests = []
+        self._report = None
         self._stopping = False
 
     def request(self, source: str, listeners: list) -> None:
         self._wanted = (source, tuple(listeners))
         self._wake.set()
+
+    def retry_device(self, key: str, name: str) -> None:
+        self._retry = (key, name)
+        self._wake.set()
+
+    def test_device(self, key: str) -> None:
+        self._test_requests.append(key)
+        self._wake.set()
+
+    def cancel_test_requests(self) -> None:
+        self._test_requests.clear()
 
     def shutdown(self) -> None:
         self._stopping = True
@@ -369,16 +467,98 @@ class Worker(threading.Thread):
                 self.engine.stop()
                 return
             wanted = self._wanted
-            if wanted is None or wanted == self._applied:
+            if wanted is not None and wanted != self._applied:
+                self._applied = wanted
+                source, listeners = wanted
+                if not listeners:
+                    self.engine.stop()
+                    report = {"source": source, "ok": [], "failed": {}, "missing": []}
+                else:
+                    report = self.engine.start(source, list(listeners))
+                self._report = report
+                if self._wanted == wanted:      # nothing newer arrived meanwhile
+                    self.results.put(report)
                 continue
-            self._applied = wanted
+
+            if self._test_requests:
+                if wanted is None:
+                    continue
+                test_key = self._test_requests.pop(0)
+                _source, listeners = wanted
+                if miniaudio is None:
+                    self.results.put({
+                        "test_error": test_key,
+                        "detail": "The MP3 decoder could not load: "
+                                  + (_MINIAUDIO_IMPORT_ERROR or "unknown import error"),
+                    })
+                    continue
+                if any(key == test_key for key, _ in listeners):
+                    try:
+                        sound = miniaudio.decode_file(
+                            str(self.test_sound),
+                            output_format=miniaudio.SampleFormat.FLOAT32,
+                            nchannels=2,
+                            sample_rate=48000,
+                        )
+                        if self._wanted != wanted:
+                            continue
+                        duration = self.engine.play_test_sound(
+                            test_key, sound.samples, sound.nchannels,
+                            sound.sample_rate)
+                        if duration > 0:
+                            if self._wanted == wanted:
+                                self.results.put({"test": test_key,
+                                                  "duration": duration})
+                        else:
+                            self.results.put({
+                                "test_error": test_key,
+                                "detail": "The selected device is not currently playing.",
+                            })
+                    except Exception as exc:
+                        self.results.put({"test_error": test_key,
+                                          "detail": str(exc) or type(exc).__name__})
+                continue
+
+            retry = self._retry
+            self._retry = None
+            if retry is None or wanted is None:
+                continue
+            key, name = retry
             source, listeners = wanted
-            if not listeners:
-                self.engine.stop()
-                report = {"source": source, "ok": [], "failed": {}, "missing": []}
-            else:
+            if not any(listener_key == key for listener_key, _ in listeners):
+                continue
+
+            outcome, detail = self.engine.retry_listener(key, name)
+            if outcome == "restart":
                 report = self.engine.start(source, list(listeners))
-            if self._wanted == wanted:          # nothing newer arrived meanwhile
+            else:
+                report = dict(self._report or {
+                    "source": source, "ok": [], "failed": {}, "missing": []})
+                report["ok"] = list(report.get("ok", []))
+                report["failed"] = dict(report.get("failed", {}))
+                report["missing"] = list(report.get("missing", []))
+                report["source"] = source
+                if outcome == "ok":
+                    if key not in report["ok"]:
+                        report["ok"].append(key)
+                    report["failed"].pop(key, None)
+                    report["missing"] = [item for item in report["missing"]
+                                         if item != key]
+                elif outcome == "missing":
+                    report["failed"].pop(key, None)
+                    if key not in report["missing"]:
+                        report["missing"].append(key)
+                else:
+                    report["ok"] = [item for item in report["ok"] if item != key]
+                    report["missing"] = [item for item in report["missing"]
+                                         if item != key]
+                    report["failed"][key] = detail
+                report["latency_ms"] = {
+                    listener_key: int(stats["latency_ms"])
+                    for listener_key, stats in self.engine.stats().items()
+                }
+            self._report = report
+            if self._wanted == wanted:
                 self.results.put(report)
 
 
@@ -403,7 +583,7 @@ class App(tk.Tk):
 
         self.engine = Engine()
         self.results: queue.Queue = queue.Queue()
-        self.worker = Worker(self.engine, self.results)
+        self.worker = Worker(self.engine, self.results, TEST_SOUND)
         self.worker.start()
 
         self.devices: list = []
@@ -413,6 +593,10 @@ class App(tk.Tk):
         self.rows: dict = {}
         self._signature = None
         self._report = None
+        self._test_state: dict = {}
+        self._test_jobs: dict = {}
+        self._test_remaining: dict = {}
+        self._test_started_at: dict = {}
         self._scan_job = None
         self._theme_job = None
 
@@ -608,9 +792,11 @@ class App(tk.Tk):
     # -- routing -----------------------------------------------------------
 
     def set_selected(self, device_id: str, on: bool) -> None:
+        self._cancel_all_tests()
         if on:
             self.selected.add(device_id)
         else:
+            self._cancel_test(device_id)
             self.selected.discard(device_id)
         row = self.rows.get(device_id)
         if isinstance(row, DeviceRow):
@@ -623,6 +809,106 @@ class App(tk.Tk):
         self.delays[device_id] = seconds
         self.engine.set_delay(device_id, seconds)
         self._save_settings()
+
+    def retry_device(self, device_id: str) -> None:
+        row = self.rows.get(device_id)
+        if (self.source is None or device_id not in self.selected
+                or not isinstance(row, DeviceRow)):
+            return
+        row.show_note("Retrying…")
+        self.worker.retry_device(device_id, row.device.name)
+
+    def test_device(self, device_id: str) -> None:
+        row = self.rows.get(device_id)
+        if (device_id not in self.selected
+                or not isinstance(row, DeviceRow)):
+            return
+        state = self._test_state.get(device_id)
+        if state == "Preparing test sound":
+            return
+        if state == "Playing test sound":
+            if self.engine.toggle_test_sound(device_id) == "paused":
+                remaining = self._test_remaining.get(device_id, 0.0)
+                started = self._test_started_at.pop(device_id, time.monotonic())
+                self._test_remaining[device_id] = max(
+                    0.0, remaining - (time.monotonic() - started))
+                job = self._test_jobs.pop(device_id, None)
+                if job is not None:
+                    self.after_cancel(job)
+                self._test_state[device_id] = "Test sound paused"
+                self._paint_notes()
+            return
+        if state == "Test sound paused":
+            if self.engine.toggle_test_sound(device_id) == "playing":
+                self._test_state[device_id] = "Playing test sound"
+                self._schedule_test_finish(device_id)
+            else:
+                self._test_state[device_id] = "Preparing test sound"
+                self.worker.test_device(device_id)
+            self._paint_notes()
+            return
+        self._test_state[device_id] = "Preparing test sound"
+        self._paint_notes()
+        self.worker.test_device(device_id)
+
+    def _test_started(self, device_id: str, duration: float) -> None:
+        self._test_state[device_id] = "Playing test sound"
+        self._test_remaining[device_id] = duration
+        self._schedule_test_finish(device_id)
+        self._paint_notes()
+
+    def _schedule_test_finish(self, device_id: str) -> None:
+        self._test_started_at[device_id] = time.monotonic()
+        self._test_jobs[device_id] = self.after(
+            max(1, round(self._test_remaining.get(device_id, 0.0) * 1000)),
+            lambda key=device_id: self._finish_test(key))
+
+    def _test_failed(self, device_id: str, detail: str = "") -> None:
+        self._test_state.pop(device_id, None)
+        self._test_remaining.pop(device_id, None)
+        self._test_started_at.pop(device_id, None)
+        job = self._test_jobs.pop(device_id, None)
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+        row = self.rows.get(device_id)
+        if isinstance(row, DeviceRow):
+            row.set_test_button("idle")
+            message = "Test sound unavailable"
+            if detail:
+                message += ": " + detail.replace("\n", " ")[:180]
+            row.show_note(message, bad=True)
+
+    def _finish_test(self, device_id: str) -> None:
+        self._test_jobs.pop(device_id, None)
+        self._test_state.pop(device_id, None)
+        self._test_remaining.pop(device_id, None)
+        self._test_started_at.pop(device_id, None)
+        row = self.rows.get(device_id)
+        if isinstance(row, DeviceRow):
+            row.set_test_button("idle")
+        self._paint_notes()
+
+    def _cancel_test(self, device_id: str) -> None:
+        self._test_state.pop(device_id, None)
+        self._test_remaining.pop(device_id, None)
+        self._test_started_at.pop(device_id, None)
+        job = self._test_jobs.pop(device_id, None)
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+        row = self.rows.get(device_id)
+        if isinstance(row, DeviceRow):
+            row.set_test_button("idle")
+
+    def _cancel_all_tests(self) -> None:
+        for device_id in tuple(self._test_state):
+            self._cancel_test(device_id)
+        self.worker.cancel_test_requests()
 
     def _apply(self) -> None:
         if self.source is None:
@@ -642,8 +928,14 @@ class App(tk.Tk):
         arrived = False
         try:
             while True:
-                self._report = self.results.get_nowait()
-                arrived = True
+                report = self.results.get_nowait()
+                if "test" in report:
+                    self._test_started(report["test"], report["duration"])
+                elif "test_error" in report:
+                    self._test_failed(report["test_error"], report.get("detail", ""))
+                else:
+                    self._report = report
+                    arrived = True
         except queue.Empty:
             pass
         if arrived:
@@ -655,17 +947,26 @@ class App(tk.Tk):
         report = self._report or {}
         failed = report.get("failed", {})
         missing = set(report.get("missing", []))
-        playing = set(report.get("ok", []))
         for device_id, row in self.rows.items():
             if not isinstance(row, DeviceRow):
                 continue
             if device_id in failed:
-                row.show_note("In use by something else", bad=True)
+                row.set_test_button("idle")
+                row.show_note("Couldn’t connect", bad=True, retry=True)
             elif device_id in missing:
-                row.show_note("Not reachable", bad=True)
-            elif device_id in self.selected and device_id in playing:
-                row.show_note("Listening")
+                row.set_test_button("idle")
+                row.show_note("Not reachable", bad=True, retry=True)
+            elif device_id in self._test_state:
+                state = self._test_state[device_id]
+                row.show_note("")
+                if state == "Preparing test sound":
+                    row.set_test_button("preparing")
+                elif state == "Playing test sound":
+                    row.set_test_button("playing")
+                else:
+                    row.set_test_button("idle")
             else:
+                row.set_test_button("idle")
                 row.show_note("")
 
     def _paint_status(self) -> None:
@@ -753,7 +1054,7 @@ class App(tk.Tk):
             pass
 
     def _close(self) -> None:
-        for job in (self._scan_job, self._theme_job):
+        for job in (self._scan_job, self._theme_job, *self._test_jobs.values()):
             if job is not None:
                 try:
                     self.after_cancel(job)

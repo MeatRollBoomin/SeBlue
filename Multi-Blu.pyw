@@ -16,7 +16,8 @@ REQUIREMENTS = {
     "comtypes": "comtypes",
     "pycaw": "pycaw",
     "pyaudiowpatch": "PyAudioWPatch",
-    "PIL": "Pillow",
+    "tkinter_icons": "tkinter-icons[fontawesome]",
+    "miniaudio": "miniaudio",
 }
 
 

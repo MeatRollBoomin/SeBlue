@@ -2,4 +2,5 @@ numpy
 comtypes
 pycaw
 PyAudioWPatch
-Pillow
+tkinter-icons[fontawesome]
+miniaudio
