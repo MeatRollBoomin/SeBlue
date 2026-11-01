@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from multiblu.theme import (DEFAULT_ACCENT, Theme, abgr_to_hex, blend,
+from seblue.theme import (DEFAULT_ACCENT, Theme, abgr_to_hex, blend,
                             contrast_ink, contrast_ratio, palette_for,
                             readable_accent, read_theme)
 

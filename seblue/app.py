@@ -19,6 +19,9 @@ import threading
 import time
 import tkinter as tk
 from pathlib import Path
+from PIL import Image
+import pystray
+from pystray import Menu, MenuItem
 from tkinter_icons import FontAwesomeIcon
 
 try:
@@ -57,6 +60,8 @@ APP_DATA = Path(os.environ.get("LOCALAPPDATA", Path.home()))
 SETTINGS = APP_DATA / "Seblue" / "settings.json"
 APP_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
 TEST_SOUND = APP_ROOT / "assets" / "Sony-DTS-Sound.mp3"
+APP_ICON_ICO = APP_ROOT / "assets" / "seblue.ico"
+APP_ICON_PNG = APP_ROOT / "assets" / "seblue.png"
 SCAN_MS = 1500
 MAX_DELAY = 0.30        # seconds of hand-tuned sync nudge per device
 
@@ -464,10 +469,13 @@ class DeviceRow(RoundedFrame):
         labels.pack(side="left", fill="x", expand=True)
         name_row = tk.Frame(labels, bg=CARD)
         name_row.pack(fill="x")
-        self.name = tk.Label(name_row, text=device.name, bg=CARD, fg=TEXT,
+        self.name = tk.Label(name_row, text=app._device_name(device), bg=CARD, fg=TEXT,
                              font=(UI, 10), anchor="w", justify="left",
                              wraplength=px(240))
         self.name.pack(side="left", anchor="w")
+        self._name_row = name_row
+        self._name_entry = None
+        self._rename_buttons = ()
         self.quality = QualityIndicator(name_row)
         self.quality.pack(side="left", padx=(px(5), 0))
         _icon, device_type = _device_info(device.name)
@@ -536,8 +544,9 @@ class DeviceRow(RoundedFrame):
             highlightcolor=ACCENT, font=(UI, 8), padx=0, pady=0,
             cursor="hand2", takefocus=True)
         self.test_button.pack(side="left")
+        self._name_tooltip = Tooltip(self.name, app._device_name(device))
         self._tooltips = [
-            Tooltip(self.name, device.name),
+            self._name_tooltip,
             Tooltip(self.quality, self._quality_tooltip),
             Tooltip(self.toggle, self._toggle_tooltip),
             Tooltip(self.slider, "Adjust this device's output volume."),
@@ -554,11 +563,106 @@ class DeviceRow(RoundedFrame):
                 add="+",
             )
 
+        # Make the whole card a right-click target, including its labels and
+        # controls, so renaming does not depend on finding a narrow empty area.
+        for widget in (self, head, labels, name_row, self.name, self.quality,
+                       self.type_label, self.note_row, self.note, self.retry_button,
+                       self.toggle, self.volume_row, self.mute_button, self.slider,
+                       self.percent, self.sync_row, self.sync, self.sync_value,
+                       self.test_row, self.test_button):
+            widget.bind("<Button-3>", self._context_menu, add="+")
+
         self.spacer = tk.Frame(self, bg=CARD, height=px(10))
+        self.spacer.bind("<Button-3>", self._context_menu, add="+")
         self.spacer.pack(fill="x", padx=px(10))
 
     def _toggled(self, on: bool) -> None:
         self.app.set_selected(self.device.id, on)
+
+    def _context_menu(self, event):
+        menu = tk.Menu(self, tearoff=0, bg=CARD, fg=TEXT, bd=0,
+                       activebackground=ACCENT, activeforeground=ACCENT_INK,
+                       font=(UI, 9))
+        menu.add_command(label="Rename device…",
+                         command=self._begin_rename)
+        menu.tk_popup(event.x_root, event.y_root)
+        return "break"
+
+    def _begin_rename(self) -> None:
+        if self._name_entry is not None:
+            self._name_entry.focus_set()
+            return
+
+        self.name.pack_forget()
+        self.quality.pack_forget()
+        entry = tk.Entry(
+            self._name_row, bg=CARD, fg=TEXT, insertbackground=TEXT,
+            selectbackground=ACCENT, selectforeground=ACCENT_INK,
+            relief="flat", bd=0, highlightthickness=1,
+            highlightbackground=EDGE, highlightcolor=ACCENT,
+            font=(UI, 10), takefocus=True)
+        entry.insert(0, self.app._device_name(self.device))
+        entry.pack(side="left", fill="x", expand=True)
+        entry.bind("<Return>", self._commit_rename)
+        entry.bind("<Escape>", self._cancel_rename)
+        self._name_entry = entry
+
+        reset_image = _fontawesome_image("arrow-rotate-left", px(12), ACCENT_FG)
+        cancel_image = _fontawesome_image("xmark", px(12), ACCENT_FG)
+        reset = tk.Button(
+            self._name_row, image=reset_image,
+            command=self._reset_name, bg=CARD, fg=ACCENT_FG,
+            activebackground=HOVER, activeforeground=ACCENT_FG,
+            relief="flat", bd=0, padx=px(4), pady=0, cursor="hand2",
+            takefocus=True, highlightthickness=1,
+            highlightbackground=CARD, highlightcolor=ACCENT)
+        cancel = tk.Button(
+            self._name_row, image=cancel_image,
+            command=self._cancel_rename, bg=CARD, fg=ACCENT_FG,
+            activebackground=HOVER, activeforeground=ACCENT_FG,
+            relief="flat", bd=0, padx=px(4), pady=0, cursor="hand2",
+            takefocus=True, highlightthickness=1,
+            highlightbackground=CARD, highlightcolor=ACCENT)
+        reset.image = reset_image
+        cancel.image = cancel_image
+        reset.pack(side="right")
+        cancel.pack(side="right")
+        self._rename_buttons = (reset, cancel)
+        Tooltip(reset, "Reset to the original device name.")
+        Tooltip(cancel, "Cancel renaming.")
+        entry.focus_set()
+        entry.selection_range(0, "end")
+
+    def _commit_rename(self, _event=None):
+        if self._name_entry is None:
+            return "break"
+        name = self._name_entry.get().strip()
+        if not name:
+            self._name_entry.focus_set()
+            return "break"
+        self.app._set_device_name(self.device, name)
+        self._finish_rename(self.app._device_name(self.device))
+        return "break"
+
+    def _cancel_rename(self, _event=None):
+        self._finish_rename(self.app._device_name(self.device))
+        return "break"
+
+    def _reset_name(self) -> None:
+        self.app._set_device_name(self.device, None)
+        self._finish_rename(self.device.name)
+
+    def _finish_rename(self, name: str) -> None:
+        for button in self._rename_buttons:
+            button.destroy()
+        self._rename_buttons = ()
+        if self._name_entry is not None:
+            self._name_entry.destroy()
+            self._name_entry = None
+        self.name.configure(text=name)
+        self._name_tooltip.text = name
+        self.name.pack(side="left", anchor="w")
+        self.quality.pack(side="left", padx=(px(5), 0))
 
     def _toggle_tooltip(self) -> str:
         action = "Stop routing audio to" if self.device.id in self.app.selected else "Route audio to"
@@ -858,6 +962,15 @@ class App(tk.Tk):
         SURFACE = key if self._glass else BG
 
         self.title("Seblue")
+        try:
+            self.wm_iconbitmap(str(APP_ICON_ICO))
+        except tk.TclError:
+            pass
+        try:
+            self._window_icon = tk.PhotoImage(file=str(APP_ICON_PNG))
+            self.iconphoto(True, self._window_icon)
+        except tk.TclError:
+            self._window_icon = None
         self.configure(bg=SURFACE)
         self.wm_attributes("-transparentcolor", key if self._glass else "")
         self.geometry("%dx%d" % (px(430), px(560)))
@@ -872,6 +985,7 @@ class App(tk.Tk):
         self.source = None
         self.selected: set = set()
         self.delays: dict = {}
+        self.device_names: dict[str, str] = {}
         self.rows: dict = {}
         self._signature = None
         self._report = None
@@ -883,11 +997,15 @@ class App(tk.Tk):
         self._scan_job = None
         self._theme_job = None
         self._quality_job = None
+        self._tray_icon = None
+        self._tray_actions: queue.Queue[str] = queue.Queue()
+        self._closing = False
 
         self._build()
         self._apply_window_theme(rebuild=False)
         self._load_settings()
-        self.protocol("WM_DELETE_WINDOW", self._close)
+        self.protocol("WM_DELETE_WINDOW", self._hide_to_tray)
+        self.bind("<Unmap>", self._on_minimize, add="+")
         self.bind_all("<MouseWheel>", self._wheel)
         self.bind("<Map>", self._mapped)
         self._scan()
@@ -1045,10 +1163,6 @@ class App(tk.Tk):
         self.source = next((d for d in devices if d.id == default), None)
         if self.source is None and devices:
             self.source = devices[0]
-
-        self.selected &= {d.id for d in devices}
-        if self.source is not None:
-            self.selected.discard(self.source.id)
 
         signature = (tuple(sorted((d.id, d.name) for d in devices)),
                      self.source.id if self.source else None)
@@ -1209,7 +1323,12 @@ class App(tk.Tk):
             self.status.configure(text="No output device to share.", fg=DIM)
             return
         by_id = {d.id: d.name for d in self.devices}
-        listeners = [(i, by_id[i]) for i in sorted(self.selected) if i in by_id]
+        listeners = [
+            (device_id, by_id[device_id])
+            for device_id in sorted(self.selected)
+            if device_id in by_id
+            and (self.source is None or device_id != self.source.id)
+        ]
         self.engine.delays = dict(self.delays)
         self.worker.request(self.source.name, listeners)
         if listeners:
@@ -1219,6 +1338,7 @@ class App(tk.Tk):
                                   fg=DIM)
 
     def _drain(self) -> None:
+        self._drain_tray_actions()
         arrived = False
         try:
             while True:
@@ -1236,6 +1356,62 @@ class App(tk.Tk):
             self._paint_notes()
             self._paint_status()
         self.after(120, self._drain)
+
+    def _ensure_tray_icon(self) -> None:
+        if self._tray_icon is not None:
+            return
+        image = Image.open(APP_ICON_ICO).convert("RGBA")
+        menu = Menu(
+            MenuItem("Open Seblue", self._queue_tray_open, default=True),
+            MenuItem("Exit", self._queue_tray_exit),
+        )
+        self._tray_icon = pystray.Icon("Seblue", image, "Seblue", menu)
+        self._tray_icon.run_detached()
+
+    def _queue_tray_open(self, _icon=None, _item=None) -> None:
+        self._tray_actions.put("open")
+
+    def _queue_tray_exit(self, _icon=None, _item=None) -> None:
+        self._tray_actions.put("exit")
+
+    def _drain_tray_actions(self) -> None:
+        try:
+            while True:
+                action = self._tray_actions.get_nowait()
+                if action == "open":
+                    self._restore_from_tray()
+                elif action == "exit":
+                    self._close()
+        except queue.Empty:
+            pass
+
+    def _hide_to_tray(self) -> None:
+        if self._closing:
+            return
+        try:
+            self._ensure_tray_icon()
+        except Exception as exc:
+            self.status.configure(
+                text="Could not open the system tray icon: %s" % exc, fg=DANGER)
+            return
+        self.withdraw()
+
+    def _on_minimize(self, event) -> None:
+        if event.widget is not self:
+            return
+        self.after_idle(self._hide_if_iconified)
+
+    def _hide_if_iconified(self) -> None:
+        if not self._closing and self.state() == "iconic":
+            self._hide_to_tray()
+
+    def _restore_from_tray(self) -> None:
+        if self._closing:
+            return
+        self.deiconify()
+        self.state("normal")
+        self.lift()
+        self.focus_force()
 
     def _refresh_quality(self) -> None:
         try:
@@ -1390,13 +1566,28 @@ class App(tk.Tk):
 
     # -- settings ----------------------------------------------------------
 
+    def _device_name(self, device) -> str:
+        return self.device_names.get(device.id, device.name)
+
+    def _set_device_name(self, device, name: str | None) -> None:
+        name = name.strip() if name is not None else ""
+        if not name or name == device.name:
+            self.device_names.pop(device.id, None)
+        else:
+            self.device_names[device.id] = name
+        self._save_settings()
+
     def _load_settings(self) -> None:
         try:
             saved = json.loads(SETTINGS.read_text(encoding="utf-8-sig"))
             self.selected = set(saved.get("selected", []))
             self.delays = {k: float(v) for k, v in saved.get("delays", {}).items()}
+            self.device_names = {
+                str(k): str(v) for k, v in saved.get("device_names", {}).items()
+                if isinstance(v, str) and v.strip()
+            }
         except Exception:
-            self.selected, self.delays = set(), {}
+            self.selected, self.delays, self.device_names = set(), {}, {}
 
     def _save_settings(self) -> None:
         try:
@@ -1404,12 +1595,16 @@ class App(tk.Tk):
             SETTINGS.write_text(
                 json.dumps({"selected": sorted(self.selected),
                             "delays": {k: round(v, 4)
-                                       for k, v in self.delays.items() if v}}),
+                                       for k, v in self.delays.items() if v},
+                            "device_names": self.device_names}),
                 encoding="utf-8")
         except Exception:
             pass
 
     def _close(self) -> None:
+        if self._closing:
+            return
+        self._closing = True
         for job in (self._scan_job, self._theme_job, self._quality_job,
                     *self._test_jobs.values()):
             if job is not None:
@@ -1417,6 +1612,11 @@ class App(tk.Tk):
                     self.after_cancel(job)
                 except Exception:
                     pass
+        if self._tray_icon is not None:
+            try:
+                self._tray_icon.stop()
+            except Exception:
+                pass
         self.worker.shutdown()
         try:
             self.engine.stop()

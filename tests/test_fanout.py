@@ -5,7 +5,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import numpy as np
-from multiblu.engine import (BLOCK, MAX_CORRECTION, Engine, Listener, _Ring,
+from seblue.engine import (BLOCK, MAX_CORRECTION, Engine, Listener, _Ring,
                              _Resampler, _remap_channels, _stretch)
 
 fails = []

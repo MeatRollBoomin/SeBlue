@@ -4,3 +4,4 @@ pycaw
 PyAudioWPatch
 tkinter-icons[fontawesome]
 miniaudio
+pystray

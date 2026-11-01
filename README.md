@@ -38,7 +38,8 @@ setting anywhere to change that. Seblue adds the missing one.
    with the others (see [Getting them in sync](#getting-them-in-sync)).
 6. **Test sound** plays the bundled Sony DTS clip through that selected device.
 7. **+ Add a Bluetooth device** opens Windows Bluetooth pairing. Once a device
-   connects it appears in the list on its own — no restart needed.
+   connects it appears in the list on its own — no restart needed. Selected
+   devices stay remembered while disconnected and resume when they reconnect.
 8. The window follows Windows **light/dark mode and accent colour**, and uses
    the **Mica** backdrop on Windows 11.
 
@@ -51,6 +52,9 @@ issue. Other active devices keep playing while that device retries.
 
 There is nothing to start or stop. Flip a switch on and audio follows; flip it
 off and it stops. Your choices and volumes are remembered for next time.
+Minimizing or closing the window hides Seblue in the system tray, so routing
+continues. Use **Open Seblue** in the tray menu to restore the window, or **Exit**
+to stop playback and close the app.
 
 ## How it works
 
@@ -141,11 +145,10 @@ The result is `dist/Seblue.exe`; PyInstaller's work files stay in `build/`.
 
 ## Layout
 
-    multiblu/endpoints.py   Core Audio: device list, default device, per-device volume
-    multiblu/engine.py      loopback capture, ring buffers, drift, alignment, fan-out
-    multiblu/app.py         the window
-    multiblu/theme.py       Windows palette, accent, and Mica backdrop
-    tools/make_icon.py      regenerates assets/seblue.ico
+    seblue/endpoints.py     Core Audio: device list, default device, per-device volume
+    seblue/engine.py        loopback capture, ring buffers, drift, alignment, fan-out
+    seblue/app.py           the window
+    seblue/theme.py         Windows palette, accent, and Mica backdrop
     tests/test_fanout.py    offline checks, no hardware needed
     tests/test_theme.py     palette and accent checks, no hardware needed
 

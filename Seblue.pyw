@@ -18,6 +18,7 @@ REQUIREMENTS = {
     "pyaudiowpatch": "PyAudioWPatch",
     "tkinter_icons": "tkinter-icons[fontawesome]",
     "miniaudio": "miniaudio",
+    "pystray": "pystray",
 }
 
 
@@ -56,5 +57,5 @@ if __name__ == "__main__":
     if problem:
         _complain(problem)
         sys.exit(1)
-    from multiblu.app import main
+    from seblue.app import main
     main()
