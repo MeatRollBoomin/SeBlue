@@ -1,4 +1,4 @@
-"""Seblue's window.
+"""SeBlue's window.
 
 One list. Flip the switch next to a pair of headphones and they start hearing
 whatever this machine is playing. Nothing else to set up.
@@ -34,6 +34,7 @@ except ImportError as exc:
 from . import endpoints as ep
 from . import theme as th
 from .engine import Engine
+from .single_instance import SingleInstanceGuard
 from .theme import blend as _blend
 
 _PALETTE = th.palette_for(True, th.DEFAULT_ACCENT)
@@ -949,7 +950,8 @@ class Worker(threading.Thread):
 
 
 class App(tk.Tk):
-    def __init__(self, theme: th.Theme | None = None, start_hidden: bool = False):
+    def __init__(self, theme: th.Theme | None = None, start_hidden: bool = False,
+                 instance_guard: SingleInstanceGuard | None = None):
         global SURFACE
         super().__init__()
         ep.com_init()
@@ -961,7 +963,7 @@ class App(tk.Tk):
         key = GLASS_KEYS[self._theme.dark]
         SURFACE = key if self._glass else BG
 
-        self.title("Seblue")
+        self.title("SeBlue")
         try:
             self.wm_iconbitmap(str(APP_ICON_ICO))
         except tk.TclError:
@@ -999,13 +1001,13 @@ class App(tk.Tk):
         self._quality_job = None
         self._tray_icon = None
         self._tray_actions: queue.Queue[str] = queue.Queue()
+        self._instance_guard = instance_guard
         self._closing = False
 
         self._build()
         self._apply_window_theme(rebuild=False)
         self._load_settings()
         self.protocol("WM_DELETE_WINDOW", self._hide_to_tray)
-        self.bind("<Unmap>", self._on_minimize, add="+")
         self.bind_all("<MouseWheel>", self._wheel)
         self.bind("<Map>", self._mapped)
         self._scan()
@@ -1021,7 +1023,7 @@ class App(tk.Tk):
         outer = tk.Frame(self, bg=SURFACE)
         outer.pack(fill="both", expand=True, padx=px(18), pady=px(16))
 
-        tk.Label(outer, text="Seblue", bg=SURFACE, fg=TEXT,
+        tk.Label(outer, text="SeBlue", bg=SURFACE, fg=TEXT,
                  font=(UI, 17, "bold"), anchor="w").pack(fill="x")
         self.subtitle = tk.Label(outer, text="Play your audio on several headphones at once",
                                  bg=SURFACE, fg=DIM, font=(UI, 9), anchor="w",
@@ -1047,7 +1049,7 @@ class App(tk.Tk):
         self.change.bind("<KeyPress-Return>", self._choose_source_key)
         self.change.bind("<KeyPress-space>", self._choose_source_key)
         self._source_tooltip = Tooltip(
-            self.change, "Choose which Windows output device Seblue shares audio from.")
+            self.change, "Choose which Windows output device SeBlue shares audio from.")
 
         self._caption(outer, "ALSO PLAYING TO")
 
@@ -1341,6 +1343,9 @@ class App(tk.Tk):
 
     def _drain(self) -> None:
         self._drain_tray_actions()
+        if (self._instance_guard is not None
+                and self._instance_guard.consume_activation_request()):
+            self._restore_from_tray()
         arrived = False
         try:
             while True:
@@ -1364,10 +1369,10 @@ class App(tk.Tk):
             return
         image = Image.open(APP_ICON_ICO).convert("RGBA")
         menu = Menu(
-            MenuItem("Open Seblue", self._queue_tray_open, default=True),
+            MenuItem("Open SeBlue", self._queue_tray_open, default=True),
             MenuItem("Exit", self._queue_tray_exit),
         )
-        self._tray_icon = pystray.Icon("Seblue", image, "Seblue", menu)
+        self._tray_icon = pystray.Icon("SeBlue", image, "SeBlue", menu)
         self._tray_icon.run_detached()
 
     def _queue_tray_open(self, _icon=None, _item=None) -> None:
@@ -1397,15 +1402,6 @@ class App(tk.Tk):
                 text="Could not open the system tray icon: %s" % exc, fg=DANGER)
             return
         self.withdraw()
-
-    def _on_minimize(self, event) -> None:
-        if event.widget is not self:
-            return
-        self.after_idle(self._hide_if_iconified)
-
-    def _hide_if_iconified(self) -> None:
-        if not self._closing and self.state() == "iconic":
-            self._hide_to_tray()
 
     def _restore_from_tray(self) -> None:
         if self._closing:
@@ -1628,5 +1624,12 @@ class App(tk.Tk):
 
 
 def main() -> None:
-    _enable_dpi()
-    App(start_hidden="--minimized" in sys.argv[1:]).mainloop()
+    guard = SingleInstanceGuard()
+    if not guard.acquire_or_signal():
+        return
+    try:
+        _enable_dpi()
+        App(start_hidden="--minimized" in sys.argv[1:],
+            instance_guard=guard).mainloop()
+    finally:
+        guard.close()

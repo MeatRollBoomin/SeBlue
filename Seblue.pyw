@@ -1,4 +1,4 @@
-"""Launch Seblue.
+"""Launch SeBlue.
 
 Double-click this file, or use Seblue.bat / the desktop shortcut. Anything
 missing is installed on first run so the app works straight out of the folder.
@@ -34,7 +34,7 @@ def _install_missing() -> str:
                        check=True, capture_output=True,
                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except Exception as exc:
-        return "Seblue needs these packages:\n\n    %s\n\nInstall them with:\n\n" \
+        return "SeBlue needs these packages:\n\n    %s\n\nInstall them with:\n\n" \
                "    pip install %s\n\n(%s)" % ("\n    ".join(missing),
                                                " ".join(missing), exc)
     return ""
@@ -46,7 +46,7 @@ def _complain(message: str) -> None:
         from tkinter import messagebox
         root = tkinter.Tk()
         root.withdraw()
-        messagebox.showerror("Seblue", message)
+        messagebox.showerror("SeBlue", message)
         root.destroy()
     except Exception:
         print(message)

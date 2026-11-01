@@ -1,9 +1,9 @@
-# Seblue Connect
+# SeBlue Connect
 <p align="center">
-  <img src="docs/seblue.png" alt="Seblue">
+  <img src="docs/seblue.png" alt="SeBlue">
 </p>
 
-Seblue routes audio from the current Windows output to other connected audio
+SeBlue routes audio from the current Windows output to other connected audio
 devices at the same time. Use it to let several people listen through separate
 headphones or speakers.
 
@@ -13,9 +13,9 @@ headphones or speakers.
 | ![Image 1](docs/screenshot-light.png) | ![Image 2](docs/screenshot-dark.png) |
 
 
-## Run Seblue
+## Run SeBlue
 
-Download **`Seblue-Setup.exe`** from the [latest GitHub release](https://github.com/shreyasmandem/multi-blu/releases/latest) and run it. It sets up Seblue for the current Windows user. During setup, you can choose whether to create a desktop shortcut and launch Seblue when you sign in. Both options are enabled by default; sign-in launch starts the app in the system tray.
+Download **`SeBlue-Setup.exe`** from the [latest GitHub release](https://github.com/shreyasmandem/multi-blu/releases/latest) and run it. It sets up SeBlue for the current Windows user. During setup, you can choose whether to create a desktop shortcut and launch SeBlue when you sign in. Both options are enabled by default; sign-in launch starts the app in the system tray.
 
 ## Using the app
 
@@ -26,18 +26,18 @@ Download **`Seblue-Setup.exe`** from the [latest GitHub release](https://github.
    check an output.
 4. Adjust a device’s delay slider to bring it into sync with the source.
 
-Seblue scans for output devices while it is open. A selected device remains
+SeBlue scans for output devices while it is open. A selected device remains
 remembered while disconnected and starts receiving audio again when it returns.
 Use **Retry** on a device row if its output fails to open.
 
 The four-bar indicator reports playback stability from recent audio underruns.
 It does not report Bluetooth radio signal strength.
 
-![Seblue window](docs/tray.png)
+![SeBlue window](docs/tray.png)
 
-Minimize or close the window to hide Seblue in the notification area. Choose
-**Open Seblue** from its tray menu to show the window again, or choose **Exit**
-to stop routing and close the app.
+Minimize the window to keep it on the taskbar. Close it to hide SeBlue in the
+notification area. Choose **Open SeBlue** from the tray menu to show the window
+again, or choose **Exit** to stop routing and close the app.
 
 ### Keyboard controls
 
@@ -49,9 +49,9 @@ to stop routing and close the app.
 
 ## Audio and timing
 
-Seblue captures the current output using WASAPI loopback and sends it to each
+SeBlue captures the current output using WASAPI loopback and sends it to each
 selected endpoint. Each endpoint has its own playback stream and volume control.
-Seblue aligns streams using the output latency reported by Windows and provides
+SeBlue aligns streams using the output latency reported by Windows and provides
 a per-device delay adjustment for additional tuning.
 
 Bluetooth codec latency occurs after Windows’ reported output latency, so the
@@ -61,10 +61,10 @@ is saved for that device.
 
 The source device plays directly from Windows and will generally be ahead of
 the routed devices. For the closest timing match, choose a source that nobody
-is listening to and route all listening devices through Seblue.
+is listening to and route all listening devices through SeBlue.
 
 Bluetooth adapter limits still apply. Some adapters cannot maintain multiple
-Bluetooth audio connections at once; Seblue can route to endpoints that Windows
+Bluetooth audio connections at once; SeBlue can route to endpoints that Windows
 has connected.
 
 ## Build from source
@@ -84,9 +84,9 @@ pip install pyinstaller
 python -m PyInstaller --noconfirm --clean Seblue.spec
 ```
 
-PyInstaller writes `dist/Seblue.exe` and its work files to `build/`.
+PyInstaller writes `dist/SeBlue.exe` and its work files to `build/`.
 
-The GitHub release download is `Seblue-Setup.exe`.
+The GitHub release download is `SeBlue-Setup.exe`.
 
 ## Libraries
 
@@ -110,7 +110,7 @@ The GitHub release download is `Seblue-Setup.exe`.
 
 ## Troubleshooting
 
-- **No sound from a selected output:** check its Seblue volume and Windows
+- **No sound from a selected output:** check its SeBlue volume and Windows
   output volume. If it reports an error, reconnect the device and use **Retry**.
 - **Audio stutters:** move closer to the Bluetooth adapter or reduce the number
   of active Bluetooth streams.
@@ -121,5 +121,5 @@ The GitHub release download is `Seblue-Setup.exe`.
 
 ## License
 
- Forked from [Multi-Blu](https://github.com/shreyasmandem/multi-blu). Seblue is distributed under the MIT License; see [LICENSE](LICENSE). The
+ Forked from [Multi-Blu](https://github.com/shreyasmandem/multi-blu). SeBlue is distributed under the MIT License; see [LICENSE](LICENSE). The
 device icons use Font Awesome Free under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
