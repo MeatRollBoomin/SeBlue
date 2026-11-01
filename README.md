@@ -1,170 +1,125 @@
-<h1 align="center">Seblue</h1>
-
+# Seblue Connect
 <p align="center">
-  Play the same audio through several pairs of headphones at once, so two or
-  more people can listen together.<br>
-  No virtual sound-card driver, no admin rights, no changes to your audio setup.
+  <img src="docs/seblue.png" alt="Seblue">
 </p>
 
-<p align="center">
-  <img src="docs/screenshot.png" alt="Seblue" width="420">
-</p>
+Seblue routes audio from the current Windows output to other connected audio
+devices at the same time. Use it to let several people listen through separate
+headphones or speakers.
 
----
 
-## Download
+| Windows Flow | Windows Dark |
+| :---: | :---: |
+| ![Image 1](docs/screenshot-light.png) | ![Image 2](docs/screenshot-dark.png) |
 
-Grab **Seblue.exe** from the [latest release](https://github.com/shreyasmandem/multi-blu/releases/latest).
-It is a single file — no installer, no Python, nothing to set up. Double-click it.
 
-> **Windows 10/11 only.** The whole thing is built on WASAPI loopback and the
-> Windows Core Audio API. It cannot work on macOS, Linux, Android or iOS — see
-> [Why Windows only](#why-windows-only).
+## Run Seblue
 
-## What it does
+Download **`Seblue-Setup.exe`** from the [latest GitHub release](https://github.com/shreyasmandem/multi-blu/releases/latest) and run it. It sets up Seblue for the current Windows user. During setup, you can choose whether to create a desktop shortcut and launch Seblue when you sign in. Both options are enabled by default; sign-in launch starts the app in the system tray.
 
-Windows sends audio to exactly one output device at a time, and there is no
-setting anywhere to change that. Seblue adds the missing one.
+## Using the app
 
-1. **Playing from** shows the device Windows is already using. Whoever is on
-   that device keeps hearing everything exactly as before.
-2. **Also playing to** lists every other output device. Flip a switch and that
-   device starts playing the same audio.
-3. Each device that is switched on gets its **own volume**, so two people can
-   listen at different levels — something Windows cannot do at all.
-4. A **four-bar quality indicator** reflects recent playback underruns. It
-   measures stream stability, not Bluetooth radio signal strength.
-5. Each device has a **mute** button and a **delay** slider, to line it up by ear
-   with the others (see [Getting them in sync](#getting-them-in-sync)).
-6. **Test sound** plays the bundled Sony DTS clip through that selected device.
-7. **+ Add a Bluetooth device** opens Windows Bluetooth pairing. Once a device
-   connects it appears in the list on its own — no restart needed. Selected
-   devices stay remembered while disconnected and resume when they reconnect.
-8. The window follows Windows **light/dark mode and accent colour**, and uses
-   the **Mica** backdrop on Windows 11.
+1. **Playing from** shows the output Windows is using as the audio source.
+   Select **Change** to choose another source.
+2. Under **Also playing to**, turn on each device that should receive the audio.
+3. Set each device’s volume and mute state independently. Use **Test Sound** to
+   check an output.
+4. Adjust a device’s delay slider to bring it into sync with the source.
 
-Use **Tab** and **Shift+Tab** to move through controls. **Space** or **Enter**
-activates switches and buttons. Focus a volume or delay slider and use the arrow
-keys for small adjustments, **Page Up/Down** for larger changes, or **Home/End**
-for minimum/maximum. Focused devices scroll into view automatically. If a
-selected device cannot connect, use its **Retry** action after resolving the
-issue. Other active devices keep playing while that device retries.
+Seblue scans for output devices while it is open. A selected device remains
+remembered while disconnected and starts receiving audio again when it returns.
+Use **Retry** on a device row if its output fails to open.
 
-There is nothing to start or stop. Flip a switch on and audio follows; flip it
-off and it stops. Your choices and volumes are remembered for next time.
-Minimizing or closing the window hides Seblue in the system tray, so routing
-continues. Use **Open Seblue** in the tray menu to restore the window, or **Exit**
-to stop playback and close the app.
+The four-bar indicator reports playback stability from recent audio underruns.
+It does not report Bluetooth radio signal strength.
 
-## How it works
+![Seblue window](docs/tray.png)
 
-- **WASAPI loopback** is used to listen in on the output device you are already
-  playing to — the same mechanism screen recorders use to capture desktop audio.
-- That audio is copied into a ring buffer per extra device and rendered out to
-  all of them simultaneously.
-- **No virtual audio driver or persistent routing changes.** Seblue uses
-  Windows endpoint controls for source selection, per-device volume, and mute.
-  If the app is closed or killed, its audio streams stop.
+Minimize or close the window to hide Seblue in the notification area. Choose
+**Open Seblue** from its tray menu to show the window again, or choose **Exit**
+to stop routing and close the app.
 
-Each listener runs off its own sound-card clock, so their buffers drift apart
-over time. Three details keep it clean:
+### Keyboard controls
 
-| Problem | What Seblue does |
-| --- | --- |
-| Buffers drift apart | Corrects by **resampling a block by a few samples**, never by duplicating or dropping raw ones. A duplicated sample is a step change, and at 50 blocks a second that is audible as a buzz. |
-| A device can't keep up | Its cushion grows automatically, **and every other device grows with it**, so they stay aligned instead of sliding apart. |
-| Devices have different latency | Each stream's reported output latency is measured and the quicker devices are **delayed to match the slowest**. |
-| A device stalls or vanishes | Its buffer is resynced, and a short starve is **time-stretched** rather than filled with silence, so it stumbles instead of cracking. |
+- **Tab** / **Shift+Tab** moves focus between controls.
+- **Space** or **Enter** activates the focused button or switch.
+- On a focused slider, **Left/Right** adjusts in small steps;
+  **Page Up/Page Down** adjusts in larger steps; **Home/End** selects minimum
+  or maximum.
 
-## Getting them in sync
+## Audio and timing
 
-Seblue automatically aligns devices using the latency PortAudio reports.
-That covers the host buffer, but it **cannot see the delay a Bluetooth codec
-adds after that**, which differs between devices — an SBC speaker and an aptX
-headset can be over a hundred milliseconds apart, and nothing in Windows exposes
-that number.
+Seblue captures the current output using WASAPI loopback and sends it to each
+selected endpoint. Each endpoint has its own playback stream and volume control.
+Seblue aligns streams using the output latency reported by Windows and provides
+a per-device delay adjustment for additional tuning.
 
-So there is a **delay slider** on each device. Play something with a strong
-beat, stand between the two listeners, and drag the slider on whichever device
-is *early* until the two line up. It applies instantly and is remembered.
+Bluetooth codec latency occurs after Windows’ reported output latency, so the
+app cannot measure that part automatically. To sync listeners, play a steady
+beat and increase the delay on whichever device sounds early. The delay setting
+is saved for that device.
 
-The device under **Playing from** is always the earliest, because its audio
-never passes through Seblue at all. If you want everyone perfectly level,
-set *Playing from* to a device nobody is listening on (your laptop speakers,
-turned down) and switch on every pair of headphones instead.
+The source device plays directly from Windows and will generally be ahead of
+the routed devices. For the closest timing match, choose a source that nobody
+is listening to and route all listening devices through Seblue.
 
-## Two Bluetooth headphones at once
+Bluetooth adapter limits still apply. Some adapters cannot maintain multiple
+Bluetooth audio connections at once; Seblue can route to endpoints that Windows
+has connected.
 
-This is a limit of your **Bluetooth adapter**, not of this app. Most modern
-adapters hold two audio devices at once; some refuse the second connection.
-Seblue was developed and tested with two connected simultaneously.
+## Build from source
 
-If Windows itself will not connect a second pair, a cheap USB Bluetooth dongle
-for the second one works — Seblue treats it like any other output device.
+Install Python and the project dependencies, then launch the app:
 
-## Why Windows only
-
-The app is roughly 1,000 lines, and nearly all the interesting parts are
-Windows-specific:
-
-- **WASAPI loopback** to capture what another device is playing. macOS has no
-  equivalent without a kernel extension (BlackHole, Loopback); Linux uses
-  PulseAudio/PipeWire monitor sources, a completely different API.
-- **Windows Core Audio (IMMDevice, IAudioEndpointVolume, IPolicyConfig)** to
-  enumerate endpoints, read and set per-device volume, and switch the default
-  output device.
-
-On phones this is not possible at all — Android and iOS do not let an app
-capture another app's audio or drive several Bluetooth sinks. Android 13+ has
-built-in **Auracast** / dual audio for some devices, which is the right tool
-there.
-
-## Running from source
-
-```bash
+```powershell
 pip install -r requirements.txt
 python Seblue.pyw
 ```
 
-Offline tests — fan-out, format adaptation, drift correction, alignment — need
-no audio hardware:
+The launcher checks for missing dependencies and installs them for the current
+user. To build the standalone executable:
 
-```bash
-python tests/test_fanout.py
-python tests/test_theme.py
-```
-
-Build the standalone executable:
-
-```bash
+```powershell
 pip install pyinstaller
 python -m PyInstaller --noconfirm --clean Seblue.spec
 ```
 
-The result is `dist/Seblue.exe`; PyInstaller's work files stay in `build/`.
+PyInstaller writes `dist/Seblue.exe` and its work files to `build/`.
 
-## Layout
+The GitHub release download is `Seblue-Setup.exe`.
 
-    seblue/endpoints.py     Core Audio: device list, default device, per-device volume
-    seblue/engine.py        loopback capture, ring buffers, drift, alignment, fan-out
-    seblue/app.py           the window
-    seblue/theme.py         Windows palette, accent, and Mica backdrop
-    tests/test_fanout.py    offline checks, no hardware needed
-    tests/test_theme.py     palette and accent checks, no hardware needed
+## Libraries
+
+- **NumPy** handles audio sample buffers and signal processing.
+- **PyAudioWPatch** and **PortAudio** capture Windows output and play to other
+  audio endpoints.
+- **PyCAW** and **comtypes** access Windows Core Audio devices and controls.
+- **miniaudio** decodes the bundled MP3 test sound.
+- **pystray** and **Pillow** provide the notification-area icon.
+- **tkinter-icons** supplies the Font Awesome device and control icons.
+- **Tkinter** provides the desktop interface; it is included with standard
+  Windows Python distributions.
+
+## Source map
+
+| Path | Purpose |
+| --- | --- |
+| `seblue/app.py` | Window, controls, device scanning, tray behavior |
+| `seblue/engine.py` | Audio capture, buffering, timing, and output streams |
+| `seblue/endpoints.py` | Windows audio endpoint discovery and controls |
 
 ## Troubleshooting
 
-| What you see | What it means |
-| --- | --- |
-| *In use by something else* | Another app holds that device exclusively. Close it and flip the switch again. |
-| *Not reachable* | The device disconnected. It drops off the list within a couple of seconds. |
-| Audio breaks up on one device | It is out of radio range or the adapter is saturated. The cushion grows automatically; moving closer helps. |
-| One device is behind the other | Drag its **delay** slider — see [Getting them in sync](#getting-them-in-sync). |
-| A second Bluetooth headset won't connect | Your adapter only supports one audio link. Use a USB Bluetooth dongle for the second pair. |
-| No sound on an extra device | Check its volume slider in the app, and its volume in Windows. |
+- **No sound from a selected output:** check its Seblue volume and Windows
+  output volume. If it reports an error, reconnect the device and use **Retry**.
+- **Audio stutters:** move closer to the Bluetooth adapter or reduce the number
+  of active Bluetooth streams.
+- **Devices sound out of sync:** increase the delay on the device that sounds
+  early.
+- **Second headset will not connect:** check whether the Bluetooth adapter and
+  Windows can connect to both headsets simultaneously.
 
-## Licence
+## License
 
-MIT
-
-The device icons use Font Awesome Free, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+ Forked from [Multi-Blu](https://github.com/shreyasmandem/multi-blu). Seblue is distributed under the MIT License; see [LICENSE](LICENSE). The
+device icons use Font Awesome Free under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).

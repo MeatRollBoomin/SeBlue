@@ -949,7 +949,7 @@ class Worker(threading.Thread):
 
 
 class App(tk.Tk):
-    def __init__(self, theme: th.Theme | None = None):
+    def __init__(self, theme: th.Theme | None = None, start_hidden: bool = False):
         global SURFACE
         super().__init__()
         ep.com_init()
@@ -1012,6 +1012,8 @@ class App(tk.Tk):
         self._drain()
         self._theme_job = self.after(1500, self._watch_theme)
         self._quality_job = self.after(1000, self._refresh_quality)
+        if start_hidden:
+            self.after_idle(self._hide_to_tray)
 
     # -- layout ------------------------------------------------------------
 
@@ -1627,4 +1629,4 @@ class App(tk.Tk):
 
 def main() -> None:
     _enable_dpi()
-    App().mainloop()
+    App(start_hidden="--minimized" in sys.argv[1:]).mainloop()
