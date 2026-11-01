@@ -15,7 +15,7 @@ headphones or speakers.
 
 ## Run Seblue
 
-Download **`Seblue-Setup.exe`** from the [latest GitHub release](https://github.com/shreyasmandem/multi-blu/releases/latest) and run it. It sets up Seblue for the current Windows user. During setup, you can choose whether to create a desktop shortcut and launch Seblue when you sign in. Both options are enabled by default; sign-in launch starts the app in the system tray.
+Download **`Seblue-Setup.exe`** from the [latest GitHub release](https://github.com/MeatRollBoomin/SeBlue/releases/latest) and run it. It sets up Seblue for the current Windows user. During setup, you can choose whether to create a desktop shortcut and launch Seblue when you sign in. Both options are enabled by default; sign-in launch starts the app in the system tray.
 
 ## Using the app
 
