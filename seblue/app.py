@@ -11,6 +11,7 @@ not). Without that the layout falls apart on a scaled display.
 from __future__ import annotations
 
 import ctypes
+import io
 import json
 import os
 import queue
@@ -19,7 +20,7 @@ import threading
 import time
 import tkinter as tk
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageOps, ImageTk
 import pystray
 from pystray import Menu, MenuItem
 from tkinter_icons import FontAwesomeIcon
@@ -34,6 +35,7 @@ except ImportError as exc:
 from . import endpoints as ep
 from . import theme as th
 from .engine import Engine
+from .media_session import MediaSessionReader
 from .single_instance import SingleInstanceGuard
 from .theme import blend as _blend
 
@@ -61,6 +63,7 @@ APP_DATA = Path(os.environ.get("LOCALAPPDATA", Path.home()))
 SETTINGS = APP_DATA / "Seblue" / "settings.json"
 APP_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
 TEST_SOUND = APP_ROOT / "assets" / "Sony-DTS-Sound.mp3"
+FALLBACK_COVER = APP_ROOT / "assets" / "cover-art.png"
 APP_ICON_ICO = APP_ROOT / "assets" / "seblue.ico"
 APP_ICON_PNG = APP_ROOT / "assets" / "seblue.png"
 SCAN_MS = 1500
@@ -999,9 +1002,16 @@ class App(tk.Tk):
         self._scan_job = None
         self._theme_job = None
         self._quality_job = None
+        self._media_tick_job = None
         self._tray_icon = None
         self._tray_actions: queue.Queue[str] = queue.Queue()
         self._instance_guard = instance_guard
+        self._media_reader = MediaSessionReader()
+        self._now_playing = None
+        self._now_playing_art = None
+        self._now_playing_art_data = None
+        self._now_playing_received_at = time.monotonic()
+        self._now_playing_raw_position = 0.0
         self._closing = False
 
         self._build()
@@ -1011,9 +1021,11 @@ class App(tk.Tk):
         self.bind_all("<MouseWheel>", self._wheel)
         self.bind("<Map>", self._mapped)
         self._scan()
+        self._media_reader.start()
         self._drain()
         self._theme_job = self.after(1500, self._watch_theme)
         self._quality_job = self.after(1000, self._refresh_quality)
+        self._media_tick_job = self.after(1000, self._tick_now_playing)
         if start_hidden:
             self.after_idle(self._hide_to_tray)
 
@@ -1051,6 +1063,8 @@ class App(tk.Tk):
         self._source_tooltip = Tooltip(
             self.change, "Choose which Windows output device SeBlue shares audio from.")
 
+        self._build_now_playing(outer)
+
         self._caption(outer, "ALSO PLAYING TO")
 
         # Footer is packed before the list so a long list can never push the
@@ -1075,6 +1089,131 @@ class App(tk.Tk):
         self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(
             self._window, width=e.width))
         self.bind("<Configure>", self._rewrap)
+
+    def _build_now_playing(self, parent) -> None:
+        self._now_playing_art = None
+        self._now_playing_art_data = None
+        self._fallback_cover_art = None
+        card = RoundedFrame(parent, fill=CARD, border=EDGE,
+                            corner_bg=SURFACE, radius=px(10))
+        card.pack(fill="x", pady=(0, px(12)))
+        inner = tk.Frame(card, bg=CARD)
+        inner.pack(fill="x", padx=px(10), pady=px(8))
+        self._media_art_label = tk.Label(inner, bg=CARD, fg=DIM,
+                                         text="♪", font=(UI, 20), padx=px(4))
+        try:
+            fallback = Image.open(FALLBACK_COVER).convert("RGB")
+            side = px(54)
+            fallback = ImageOps.fit(
+                fallback, (side, side), method=Image.Resampling.LANCZOS)
+            self._fallback_cover_art = ImageTk.PhotoImage(fallback, master=self)
+            self._media_art_label.configure(image=self._fallback_cover_art, text="")
+        except (OSError, tk.TclError):
+            pass
+        self._media_art_label.pack(side="left", padx=(0, px(10)))
+        detail = tk.Frame(inner, bg=CARD)
+        detail.pack(side="left", fill="x", expand=True)
+        self._media_app_label = tk.Label(detail, text="NOW PLAYING", bg=CARD,
+                                         fg=FAINT, font=(UI, 7, "bold"), anchor="w")
+        self._media_app_label.pack(fill="x")
+        self._media_title_label = tk.Label(detail, text="Nothing playing",
+                                           bg=CARD, fg=TEXT, font=(UI, 10, "bold"),
+                                           anchor="w")
+        self._media_title_label.pack(fill="x", pady=(px(2), 0))
+        self._media_artist_label = tk.Label(detail, text="Play audio in a supported app",
+                                            bg=CARD, fg=DIM, font=(UI, 8), anchor="w")
+        self._media_artist_label.pack(fill="x")
+        self._media_time_label = tk.Label(detail, text="", bg=CARD, fg=DIM,
+                                          font=(UI, 8), anchor="w")
+        self._media_time_label.pack(fill="x", pady=(px(3), 0))
+        self._render_now_playing()
+
+    @staticmethod
+    def _media_time(seconds: float) -> str:
+        seconds = max(0, int(seconds))
+        return f"{seconds // 60:02d}:{seconds % 60:02d}"
+
+    def _render_now_playing(self) -> None:
+        if not hasattr(self, "_media_title_label"):
+            return
+        item = self._now_playing
+        if not item:
+            self._media_app_label.configure(text="NOW PLAYING")
+            self._media_title_label.configure(text="Nothing playing")
+            self._media_artist_label.configure(text="Play audio in a supported app")
+            self._media_time_label.configure(text="")
+            self._show_fallback_cover()
+            self._now_playing_art = None
+            self._now_playing_art_data = None
+            return
+
+        app_name = (item.get("app") or "").strip()
+        title = (item.get("title") or "").strip()
+        artist = (item.get("artist") or "").strip()
+        self._media_app_label.configure(text=app_name or "NOW PLAYING")
+        self._media_title_label.configure(
+            text=title or (f"Audio from {app_name}" if app_name else "Audio currently playing"))
+        self._media_artist_label.configure(
+            text=artist or (f"Playing in {app_name}" if app_name and not title else ""))
+        duration = item.get("duration", 0)
+        position = item.get("position", 0)
+        if item.get("state", "").casefold() == "playing":
+            position += max(0.0, time.monotonic() - self._now_playing_received_at)
+        if duration:
+            position = min(position, duration)
+        self._media_time_label.configure(
+            text=(f"{self._media_time(position)}   /   {self._media_time(duration)}"
+                  if duration else item.get("state", "Time unavailable")))
+        artwork = item.get("artwork")
+        if artwork and artwork != self._now_playing_art_data:
+            try:
+                image = Image.open(io.BytesIO(artwork)).convert("RGB")
+                side = px(54)
+                contained = ImageOps.contain(
+                    image, (side, side), Image.Resampling.LANCZOS)
+                square = Image.new("RGB", (side, side), CARD)
+                square.paste(contained, ((side - contained.width) // 2,
+                                         (side - contained.height) // 2))
+                self._now_playing_art = ImageTk.PhotoImage(square, master=self)
+                self._now_playing_art_data = artwork
+                self._media_art_label.configure(image=self._now_playing_art, text="")
+            except Exception:
+                self._now_playing_art = None
+                self._now_playing_art_data = None
+                self._show_fallback_cover()
+        elif not artwork:
+            self._show_fallback_cover()
+
+    def _show_fallback_cover(self) -> None:
+        self._now_playing_art_data = None
+        self._now_playing_art = self._fallback_cover_art
+        if self._fallback_cover_art is not None:
+            self._media_art_label.configure(image=self._fallback_cover_art, text="")
+        else:
+            self._media_art_label.configure(image="", text="♪")
+
+    def _accept_now_playing(self, item: dict | None) -> None:
+        now = time.monotonic()
+        previous = self._now_playing
+        reported_position = float(item.get("position", 0)) if item else 0.0
+        if item and previous:
+            same_track = all(item.get(key) == previous.get(key)
+                             for key in ("app", "title", "artist"))
+            if (same_track and item.get("state", "").casefold() == "playing"
+                    and previous.get("state", "").casefold() == "playing"):
+                previous_reported = self._now_playing_raw_position
+                elapsed_position = float(previous.get("position", 0)) + max(
+                    0.0, now - self._now_playing_received_at)
+                if (reported_position >= previous_reported - 1.0
+                        and reported_position <= elapsed_position + 1.0):
+                    item["position"] = max(reported_position, elapsed_position)
+        self._now_playing_raw_position = reported_position
+        self._now_playing = item
+        self._now_playing_received_at = now
+
+    def _tick_now_playing(self) -> None:
+        self._render_now_playing()
+        self._media_tick_job = self.after(1000, self._tick_now_playing)
 
     def _caption(self, parent, text: str) -> None:
         tk.Label(parent, text=text, bg=SURFACE, fg=FAINT, font=(UI, 8, "bold"),
@@ -1346,6 +1485,15 @@ class App(tk.Tk):
         if (self._instance_guard is not None
                 and self._instance_guard.consume_activation_request()):
             self._restore_from_tray()
+        media_changed = False
+        try:
+            while True:
+                self._accept_now_playing(self._media_reader.results.get_nowait())
+                media_changed = True
+        except queue.Empty:
+            pass
+        if media_changed:
+            self._render_now_playing()
         arrived = False
         try:
             while True:
@@ -1604,6 +1752,7 @@ class App(tk.Tk):
             return
         self._closing = True
         for job in (self._scan_job, self._theme_job, self._quality_job,
+                    self._media_tick_job,
                     *self._test_jobs.values()):
             if job is not None:
                 try:
@@ -1615,6 +1764,7 @@ class App(tk.Tk):
                 self._tray_icon.stop()
             except Exception:
                 pass
+        self._media_reader.stop()
         self.worker.shutdown()
         try:
             self.engine.stop()

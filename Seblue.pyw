@@ -19,14 +19,22 @@ REQUIREMENTS = {
     "tkinter_icons": "tkinter-icons[fontawesome]",
     "miniaudio": "miniaudio",
     "pystray": "pystray",
+    "winrt.windows.media.control": "winrt-Windows.Media.Control",
+    "winrt.windows.storage.streams": "winrt-Windows.Storage.Streams",
 }
 
 
 def _install_missing() -> str:
     if getattr(sys, "frozen", False):
         return ""                       # the .exe already carries everything
+    def available(module: str) -> bool:
+        try:
+            return importlib.util.find_spec(module) is not None
+        except (ImportError, ModuleNotFoundError, ValueError):
+            return False
+
     missing = [package for module, package in REQUIREMENTS.items()
-               if importlib.util.find_spec(module) is None]
+               if not available(module)]
     if not missing:
         return ""
     try:

@@ -5,3 +5,5 @@ PyAudioWPatch
 tkinter-icons[fontawesome]
 miniaudio
 pystray
+winrt-Windows.Media.Control
+winrt-Windows.Storage.Streams

@@ -32,6 +32,9 @@ Use **Retry** on a device row if its output fails to open.
 
 The four-bar indicator reports playback stability from recent audio underruns.
 It does not report Bluetooth radio signal strength.
+The **Now Playing** card identifies the source app and displays the details
+and artwork it shares with Windows. It uses a bundled cover image when the
+session does not provide artwork.
 
 ![SeBlue window](docs/tray.png)
 
