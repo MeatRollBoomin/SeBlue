@@ -1123,6 +1123,12 @@ class App(tk.Tk):
         self._media_artist_label = tk.Label(detail, text="Play audio in a supported app",
                                             bg=CARD, fg=DIM, font=(UI, 8), anchor="w")
         self._media_artist_label.pack(fill="x")
+        self._media_progress = tk.Canvas(
+            detail, height=px(4), bg=TRACK, highlightthickness=0, bd=0)
+        self._media_progress_bar = self._media_progress.create_rectangle(
+            0, 0, 0, px(4), fill=ACCENT, outline="")
+        self._media_progress.bind(
+            "<Configure>", lambda _event: self._draw_media_progress())
         self._media_time_label = tk.Label(detail, text="", bg=CARD, fg=DIM,
                                           font=(UI, 8), anchor="w")
         self._media_time_label.pack(fill="x", pady=(px(3), 0))
@@ -1142,6 +1148,8 @@ class App(tk.Tk):
             self._media_title_label.configure(text="Nothing playing")
             self._media_artist_label.configure(text="Play audio in a supported app")
             self._media_time_label.configure(text="")
+            self._media_progress.pack_forget()
+            self._media_progress_fraction = 0.0
             self._show_fallback_cover()
             self._now_playing_art = None
             self._now_playing_art_data = None
@@ -1161,6 +1169,12 @@ class App(tk.Tk):
             position += max(0.0, time.monotonic() - self._now_playing_received_at)
         if duration:
             position = min(position, duration)
+            self._media_progress_fraction = max(0.0, min(1.0, position / duration))
+            self._media_progress.pack(fill="x", pady=(px(5), 0), before=self._media_time_label)
+            self._draw_media_progress()
+        else:
+            self._media_progress_fraction = 0.0
+            self._media_progress.pack_forget()
         self._media_time_label.configure(
             text=(f"{self._media_time(position)}   /   {self._media_time(duration)}"
                   if duration else item.get("state", "Time unavailable")))
@@ -1191,6 +1205,15 @@ class App(tk.Tk):
             self._media_art_label.configure(image=self._fallback_cover_art, text="")
         else:
             self._media_art_label.configure(image="", text="♪")
+
+    def _draw_media_progress(self) -> None:
+        if not hasattr(self, "_media_progress"):
+            return
+        width = self._media_progress.winfo_width()
+        height = self._media_progress.winfo_height()
+        fraction = getattr(self, "_media_progress_fraction", 0.0)
+        self._media_progress.coords(
+            self._media_progress_bar, 0, 0, round(width * fraction), height)
 
     def _accept_now_playing(self, item: dict | None) -> None:
         now = time.monotonic()
