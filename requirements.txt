@@ -7,3 +7,4 @@ miniaudio
 pystray
 winrt-Windows.Media.Control
 winrt-Windows.Storage.Streams
+winrt-Windows.Devices.Radios

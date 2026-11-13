@@ -36,6 +36,7 @@ from . import endpoints as ep
 from . import theme as th
 from .engine import Engine
 from .media_session import MediaSessionReader
+from .radio import BluetoothRadioController
 from .single_instance import SingleInstanceGuard
 from .theme import blend as _blend
 
@@ -58,16 +59,53 @@ GLASS_KEYS = {True: "#010203", False: "#F2F2F3"}
 MAGIC = GLASS_KEYS[True]
 SURFACE = BG
 
-UI = "Segoe UI"
 APP_DATA = Path(os.environ.get("LOCALAPPDATA", Path.home()))
 SETTINGS = APP_DATA / "Seblue" / "settings.json"
 APP_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
+UI_FONT_PATH = APP_ROOT / "assets" / "Satoshi-Variable.ttf"
 TEST_SOUND = APP_ROOT / "assets" / "Sony-DTS-Sound.mp3"
 FALLBACK_COVER = APP_ROOT / "assets" / "cover-art.png"
 APP_ICON_ICO = APP_ROOT / "assets" / "seblue.ico"
 APP_ICON_PNG = APP_ROOT / "assets" / "seblue.png"
 SCAN_MS = 1500
 MAX_DELAY = 0.30        # seconds of hand-tuned sync nudge per device
+
+_PRIVATE_FONT_DLL = None
+_PRIVATE_FONT_LOADED = False
+
+
+def _register_private_ui_font() -> str:
+    """Load the bundled Satoshi font for this process, without system install."""
+    global _PRIVATE_FONT_DLL, _PRIVATE_FONT_LOADED
+    if os.name != "nt" or not UI_FONT_PATH.is_file():
+        return "Segoe UI"
+    try:
+        gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+        add_font = gdi32.AddFontResourceExW
+        add_font.argtypes = (ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_void_p)
+        add_font.restype = ctypes.c_int
+        if add_font(str(UI_FONT_PATH), 0x10, None):  # FR_PRIVATE
+            _PRIVATE_FONT_DLL = gdi32
+            _PRIVATE_FONT_LOADED = True
+            return "Satoshi"
+    except (AttributeError, OSError, TypeError):
+        pass
+    return "Segoe UI"
+
+
+def _unregister_private_ui_font() -> None:
+    if not _PRIVATE_FONT_LOADED or _PRIVATE_FONT_DLL is None:
+        return
+    try:
+        remove_font = _PRIVATE_FONT_DLL.RemoveFontResourceExW
+        remove_font.argtypes = (ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_void_p)
+        remove_font.restype = ctypes.c_bool
+        remove_font(str(UI_FONT_PATH), 0x10, None)  # FR_PRIVATE
+    except (AttributeError, OSError, TypeError):
+        pass
+
+
+UI = _register_private_ui_font()
 
 SCALE = 1.0
 _DEVICE_ICONS = {}
@@ -149,6 +187,10 @@ class Tooltip:
         self.text = text
         self._job = None
         self._window = None
+        self.attach(widget)
+
+    def attach(self, widget) -> None:
+        """Watch another part of the same control without a second tooltip."""
         widget.bind("<Enter>", self._schedule, add="+")
         widget.bind("<Leave>", self._hide, add="+")
         widget.bind("<ButtonPress>", self._hide, add="+")
@@ -194,6 +236,11 @@ class Tooltip:
             self._job = None
 
     def _hide(self, _event=None) -> None:
+        if _event is not None:
+            is_leave = (_event.type == tk.EventType.Leave
+                        or str(_event.type).casefold() == "leave")
+            if is_leave and self._pointer_is_inside():
+                return
         self._cancel_job()
         if self._window is not None:
             try:
@@ -201,6 +248,18 @@ class Tooltip:
             except Exception:
                 pass
             self._window = None
+
+    def _pointer_is_inside(self) -> bool:
+        try:
+            current = self.widget.winfo_containing(
+                self.widget.winfo_pointerx(), self.widget.winfo_pointery())
+            while current is not None:
+                if current is self.widget:
+                    return True
+                current = getattr(current, "master", None)
+        except tk.TclError:
+            pass
+        return False
 
     def _destroyed(self, event) -> None:
         if event.widget is self.widget:
@@ -1007,6 +1066,12 @@ class App(tk.Tk):
         self._tray_actions: queue.Queue[str] = queue.Queue()
         self._instance_guard = instance_guard
         self._media_reader = MediaSessionReader()
+        self._bluetooth_controller = BluetoothRadioController()
+        self._bluetooth_enabled = None
+        self._bluetooth_available = None
+        self._bluetooth_pending = False
+        self._bluetooth_target = None
+        self._bluetooth_error = ""
         self._now_playing = None
         self._now_playing_art = None
         self._now_playing_art_data = None
@@ -1022,6 +1087,7 @@ class App(tk.Tk):
         self.bind("<Map>", self._mapped)
         self._scan()
         self._media_reader.start()
+        self._bluetooth_controller.start()
         self._drain()
         self._theme_job = self.after(1500, self._watch_theme)
         self._quality_job = self.after(1000, self._refresh_quality)
@@ -1035,8 +1101,34 @@ class App(tk.Tk):
         outer = tk.Frame(self, bg=SURFACE)
         outer.pack(fill="both", expand=True, padx=px(18), pady=px(16))
 
-        tk.Label(outer, text="SeBlue", bg=SURFACE, fg=TEXT,
-                 font=(UI, 17, "bold"), anchor="w").pack(fill="x")
+        heading = tk.Frame(outer, bg=SURFACE)
+        heading.pack(fill="x")
+        tk.Label(heading, text="SeBlue", bg=SURFACE, fg=TEXT,
+                 font=(UI, 17, "bold"), anchor="w").pack(side="left")
+        self._bluetooth_hovered = False
+        self._bluetooth_focused = False
+        self._bluetooth_button = RoundedFrame(
+            heading, fill=CARD, border=EDGE, corner_bg=SURFACE,
+            radius=px(6), width=px(42), height=px(38),
+            cursor="hand2", takefocus=True)
+        self._bluetooth_button.pack_propagate(False)
+        self._bluetooth_button.pack(side="right", padx=(px(8), 0))
+        self._bluetooth_icon_label = tk.Label(self._bluetooth_button, bg=CARD, bd=0)
+        self._bluetooth_icon_label.pack(expand=True)
+        for widget in (self._bluetooth_button, self._bluetooth_icon_label):
+            widget.bind("<Button-1>", self._toggle_bluetooth, add="+")
+            widget.bind("<Enter>", self._bluetooth_pointer_enter, add="+")
+            widget.bind("<Leave>", self._bluetooth_pointer_leave, add="+")
+        self._bluetooth_tooltip = Tooltip(
+            self._bluetooth_button, self._bluetooth_tooltip_text)
+        self._bluetooth_tooltip.attach(self._bluetooth_icon_label)
+        self._bluetooth_button.bind("<KeyPress-space>", self._toggle_bluetooth, add="+")
+        self._bluetooth_button.bind("<KeyPress-Return>", self._toggle_bluetooth, add="+")
+        self._bluetooth_button.bind(
+            "<FocusIn>", self._bluetooth_focus_in, add="+")
+        self._bluetooth_button.bind(
+            "<FocusOut>", self._bluetooth_focus_out, add="+")
+        self._render_bluetooth_button()
         self.subtitle = tk.Label(outer, text="Play your audio on several headphones at once",
                                  bg=SURFACE, fg=DIM, font=(UI, 9), anchor="w",
                                  justify="left")
@@ -1486,7 +1578,10 @@ class App(tk.Tk):
 
     def _apply(self) -> None:
         if self.source is None:
-            self.status.configure(text="No output device to share.", fg=DIM)
+            message = (self._idle_status_text()
+                       if self._bluetooth_enabled is False
+                       else "No output device to share.")
+            self.status.configure(text=message, fg=DIM)
             return
         by_id = {d.id: d.name for d in self.devices}
         listeners = [
@@ -1500,8 +1595,7 @@ class App(tk.Tk):
         if listeners:
             self.status.configure(text="Connecting...", fg=DIM)
         else:
-            self.status.configure(text="Turn on anyone who should hear this too.",
-                                  fg=DIM)
+            self.status.configure(text=self._idle_status_text(), fg=DIM)
 
     def _drain(self) -> None:
         self._drain_tray_actions()
@@ -1517,6 +1611,32 @@ class App(tk.Tk):
             pass
         if media_changed:
             self._render_now_playing()
+        bluetooth_changed = False
+        bluetooth_state_changed = False
+        try:
+            while True:
+                radio = self._bluetooth_controller.results.get_nowait()
+                previous_enabled = self._bluetooth_enabled
+                self._bluetooth_available = radio.get("available")
+                self._bluetooth_enabled = radio.get("enabled")
+                if previous_enabled != self._bluetooth_enabled:
+                    bluetooth_state_changed = True
+                self._bluetooth_error = radio.get("error", "")
+                if radio.get("request"):
+                    self._bluetooth_pending = False
+                    self._bluetooth_target = None
+                    if self._bluetooth_error:
+                        self.status.configure(
+                            text=self._bluetooth_error + " Opening Bluetooth settings.",
+                            fg=DANGER)
+                        self._open_bluetooth()
+                bluetooth_changed = True
+        except queue.Empty:
+            pass
+        if bluetooth_changed:
+            self._render_bluetooth_button()
+        if bluetooth_state_changed:
+            self._scan_now()
         arrived = False
         try:
             while True:
@@ -1534,6 +1654,77 @@ class App(tk.Tk):
             self._paint_notes()
             self._paint_status()
         self.after(120, self._drain)
+
+    def _bluetooth_tooltip_text(self) -> str:
+        if self._bluetooth_pending:
+            action = "on" if self._bluetooth_target else "off"
+            return f"Turning Bluetooth {action}..."
+        if self._bluetooth_enabled is True:
+            return "Turn Bluetooth off"
+        if self._bluetooth_enabled is False:
+            return "Turn Bluetooth on"
+        if self._bluetooth_error:
+            return "Bluetooth control unavailable. Open Bluetooth settings."
+        return "Checking Bluetooth status..."
+
+    def _idle_status_text(self) -> str:
+        if self._bluetooth_enabled is False:
+            return "Turn on Bluetooth to find and connect audio devices."
+        return "Enable a device to start sharing audio."
+
+    def _render_bluetooth_button(self) -> None:
+        if not hasattr(self, "_bluetooth_button"):
+            return
+        enabled = self._bluetooth_enabled is True and not self._bluetooth_pending
+        background = ACCENT if enabled else (HOVER if self._bluetooth_hovered else CARD)
+        foreground = "#FFFFFF" if enabled else DIM
+        self._bluetooth_button.set_fill(background)
+        self._bluetooth_button.set_border(
+            ACCENT if enabled or self._bluetooth_focused else EDGE)
+        self._bluetooth_icon_label.configure(
+            image=_fontawesome_image("bluetooth-b", px(18), foreground),
+            bg=background, cursor="arrow" if self._bluetooth_pending else "hand2")
+
+    def _bluetooth_pointer_enter(self, _event=None) -> None:
+        self._bluetooth_hovered = True
+        self._render_bluetooth_button()
+
+    def _bluetooth_pointer_leave(self, _event=None) -> None:
+        self.after_idle(self._refresh_bluetooth_hover)
+
+    def _refresh_bluetooth_hover(self) -> None:
+        current = self.winfo_containing(self.winfo_pointerx(), self.winfo_pointery())
+        inside = False
+        while current is not None:
+            if current is self._bluetooth_button:
+                inside = True
+                break
+            current = getattr(current, "master", None)
+        if inside != self._bluetooth_hovered:
+            self._bluetooth_hovered = inside
+            self._render_bluetooth_button()
+
+    def _bluetooth_focus_in(self, _event=None) -> None:
+        self._bluetooth_focused = True
+        self._render_bluetooth_button()
+
+    def _bluetooth_focus_out(self, _event=None) -> None:
+        self._bluetooth_focused = False
+        self._render_bluetooth_button()
+
+    def _toggle_bluetooth(self, _event=None) -> str:
+        if self._bluetooth_pending:
+            return "break"
+        if self._bluetooth_enabled is None:
+            if self._bluetooth_available is False or self._bluetooth_error:
+                self._open_bluetooth()
+            return "break"
+        self._bluetooth_target = not self._bluetooth_enabled
+        self._bluetooth_pending = True
+        self._bluetooth_error = ""
+        self._render_bluetooth_button()
+        self._bluetooth_controller.set_enabled(self._bluetooth_target)
+        return "break"
 
     def _ensure_tray_icon(self) -> None:
         if self._tray_icon is not None:
@@ -1646,6 +1837,9 @@ class App(tk.Tk):
             return
         count = len(report.get("ok", []))
         broken = len(report.get("failed", {})) + len(report.get("missing", []))
+        if self._bluetooth_enabled is False and not count:
+            self.status.configure(text=self._idle_status_text(), fg=DIM)
+            return
         if count and not broken:
             others = "1 other device" if count == 1 else "%d other devices" % count
             self.status.configure(
@@ -1658,8 +1852,7 @@ class App(tk.Tk):
         elif broken:
             self.status.configure(text="Could not open the selected device.", fg=DANGER)
         else:
-            self.status.configure(text="Turn on anyone who should hear this too.",
-                                  fg=DIM)
+            self.status.configure(text=self._idle_status_text(), fg=DIM)
 
     # -- source picker -----------------------------------------------------
 
@@ -1788,12 +1981,14 @@ class App(tk.Tk):
             except Exception:
                 pass
         self._media_reader.stop()
+        self._bluetooth_controller.stop()
         self.worker.shutdown()
         try:
             self.engine.stop()
         except Exception:
             pass
         self.destroy()
+        _unregister_private_ui_font()
 
 
 def main() -> None:
