@@ -91,6 +91,20 @@ PyInstaller writes `dist/SeBlue.exe` and its work files to `build/`.
 
 The GitHub release download is `SeBlue-Setup.exe`.
 
+## Run tests
+
+After installing the dependencies, run the offline checks from the project
+folder:
+
+```powershell
+python tests/test_fanout.py
+python tests/test_theme.py
+python tests/test_features.py
+```
+
+The feature checks mock Bluetooth radios and use synthetic media/session data;
+they do not toggle a radio or require audio hardware.
+
 ## Libraries
 
 - **NumPy** handles audio sample buffers and signal processing.
@@ -98,18 +112,38 @@ The GitHub release download is `SeBlue-Setup.exe`.
   audio endpoints.
 - **PyCAW** and **comtypes** access Windows Core Audio devices and controls.
 - **miniaudio** decodes the bundled MP3 test sound.
-- **pystray** and **Pillow** provide the notification-area icon.
+- **pystray** provides the notification-area icon and menu.
+- **Pillow** handles app and tray images, Now Playing artwork, and image
+  processing.
 - **tkinter-icons** supplies the Font Awesome device and control icons.
+- **WinRT media control** (`winrt-Windows.Media.Control` and
+  `winrt-Windows.Storage.Streams`) reads the current media session, timeline,
+  and artwork shared by Windows apps.
+- **WinRT radios** (`winrt-Windows.Devices.Radios`) reads and changes the
+  Windows Bluetooth radio state.
 - **Tkinter** provides the desktop interface; it is included with standard
   Windows Python distributions.
+
+The interface uses the bundled **Satoshi Variable** font when Windows can load
+it; otherwise, it falls back to Segoe UI.
 
 ## Source map
 
 | Path | Purpose |
 | --- | --- |
-| `seblue/app.py` | Window, controls, device scanning, tray behavior |
+| `Seblue.pyw` | Application entry point |
+| `seblue/app.py` | Window, controls, device scanning, Now Playing card, and tray behavior |
 | `seblue/engine.py` | Audio capture, buffering, timing, and output streams |
 | `seblue/endpoints.py` | Windows audio endpoint discovery and controls |
+| `seblue/media_session.py` | Reads Windows media-session metadata, position, and artwork |
+| `seblue/radio.py` | Reads and controls the Windows Bluetooth radio |
+| `seblue/routing.py` | Builds listener targets while preserving selected devices that are disconnected |
+| `seblue/single_instance.py` | Prevents duplicate app instances and activates the existing window |
+| `seblue/theme.py` | Theme colors, Windows appearance detection, and Mica backdrop |
+| `assets/` | App icons, cover art, Satoshi font, and test-sound MP3 |
+| `requirements.txt` | Python packages required to run the source app |
+| `Seblue.spec` | PyInstaller configuration for the standalone executable |
+| `tests/` | Automated checks for audio fan-out, themes, Bluetooth control, Now Playing, and reconnect routing |
 
 ## Troubleshooting
 

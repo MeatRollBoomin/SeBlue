@@ -35,8 +35,9 @@ except ImportError as exc:
 from . import endpoints as ep
 from . import theme as th
 from .engine import Engine
-from .media_session import MediaSessionReader
+from .media_session import MediaSessionReader, resolve_artwork
 from .radio import BluetoothRadioController
+from .routing import listener_targets
 from .single_instance import SingleInstanceGuard
 from .theme import blend as _blend
 
@@ -1270,8 +1271,10 @@ class App(tk.Tk):
         self._media_time_label.configure(
             text=(f"{self._media_time(position)}   /   {self._media_time(duration)}"
                   if duration else item.get("state", "Time unavailable")))
-        artwork = item.get("artwork")
-        if artwork and artwork != self._now_playing_art_data:
+        artwork_kind, artwork = resolve_artwork(item.get("artwork"), FALLBACK_COVER)
+        if artwork_kind == "fallback":
+            self._show_fallback_cover()
+        elif artwork != self._now_playing_art_data:
             try:
                 image = Image.open(io.BytesIO(artwork)).convert("RGB")
                 side = px(54)
@@ -1583,13 +1586,8 @@ class App(tk.Tk):
                        else "No output device to share.")
             self.status.configure(text=message, fg=DIM)
             return
-        by_id = {d.id: d.name for d in self.devices}
-        listeners = [
-            (device_id, by_id[device_id])
-            for device_id in sorted(self.selected)
-            if device_id in by_id
-            and (self.source is None or device_id != self.source.id)
-        ]
+        listeners = listener_targets(
+            self.selected, self.devices, self.source.id)
         self.engine.delays = dict(self.delays)
         self.worker.request(self.source.name, listeners)
         if listeners:
