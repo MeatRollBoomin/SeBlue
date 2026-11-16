@@ -12,6 +12,7 @@ a = Analysis(
     pathex=[],
     binaries=miniaudio_binaries + cffi_binaries + pystray_binaries,
     datas=[('assets/Sony-DTS-Sound.mp3', 'assets'),
+           ('assets/notification.wav', 'assets'),
            ('assets/Satoshi-Variable.ttf', 'assets'),
            ('assets/cover-art.png', 'assets'),
            ('assets/seblue.ico', 'assets'),

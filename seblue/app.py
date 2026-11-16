@@ -65,6 +65,7 @@ SETTINGS = APP_DATA / "Seblue" / "settings.json"
 APP_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
 UI_FONT_PATH = APP_ROOT / "assets" / "Satoshi-Variable.ttf"
 TEST_SOUND = APP_ROOT / "assets" / "Sony-DTS-Sound.mp3"
+NOTIFICATION_SOUND = APP_ROOT / "assets" / "notification.wav"
 FALLBACK_COVER = APP_ROOT / "assets" / "cover-art.png"
 APP_ICON_ICO = APP_ROOT / "assets" / "seblue.ico"
 APP_ICON_PNG = APP_ROOT / "assets" / "seblue.png"
@@ -478,37 +479,39 @@ class Slider(tk.Canvas):
                          fill=knob_color, outline="")
 
 
-class QualityIndicator(tk.Canvas):
-    """Four bars showing recent playback stability for an output device."""
+class LatencyIndicator(tk.Canvas):
+    """Four bars showing output latency; fewer bars mean more delay."""
 
     def __init__(self, master):
         self.width, self.height = px(18), px(14)
         super().__init__(master, width=self.width, height=self.height,
                          bg=CARD, highlightthickness=0, bd=0)
-        self.level = None
+        self.latency_ms = None
         self._render()
 
-    def set_level(self, level: int | None) -> None:
-        self.level = None if level is None else max(0, min(4, level))
+    def set_latency(self, latency_ms: int | None) -> None:
+        self.latency_ms = (None if latency_ms is None or int(latency_ms) <= 0
+                           else int(latency_ms))
         self._render()
 
     def _render(self) -> None:
         self.delete("all")
         heights = (px(3), px(5), px(8), px(11))
         bar_width, gap = px(3), px(1)
-        if self.level is None or self.level == 0:
+        if self.latency_ms is None:
+            level = None
             active_color = EDGE
-        elif self.level == 1:
-            active_color = "#EF4444"
-        elif self.level == 2:
-            active_color = "#F59E0B"
         else:
-            active_color = "#22C55E"
+            level = (4 if self.latency_ms <= 30 else
+                     3 if self.latency_ms <= 60 else
+                     2 if self.latency_ms <= 120 else 1)
+            active_color = ("#EF4444" if level == 1 else
+                            "#F59E0B" if level == 2 else "#22C55E")
 
         baseline = self.height - px(1)
         for index, height in enumerate(heights):
             x0 = px(1) + index * (bar_width + gap)
-            color = active_color if self.level is not None and index < self.level else EDGE
+            color = active_color if level is not None and index < level else EDGE
             self.create_rectangle(x0, baseline - height, x0 + bar_width,
                                   baseline, fill=color, outline="")
 
@@ -540,8 +543,8 @@ class DeviceRow(RoundedFrame):
         self._name_row = name_row
         self._name_entry = None
         self._rename_buttons = ()
-        self.quality = QualityIndicator(name_row)
-        self.quality.pack(side="left", padx=(px(5), 0))
+        self.latency = LatencyIndicator(name_row)
+        self.latency.pack(side="left", padx=(px(5), 0))
         _icon, device_type = _device_info(device.name)
         self.type_label = tk.Label(labels, text=device_type, bg=CARD, fg=FAINT,
                                    font=(UI, 8), anchor="w")
@@ -611,7 +614,7 @@ class DeviceRow(RoundedFrame):
         self._name_tooltip = Tooltip(self.name, app._device_name(device))
         self._tooltips = [
             self._name_tooltip,
-            Tooltip(self.quality, self._quality_tooltip),
+            Tooltip(self.latency, self._latency_tooltip),
             Tooltip(self.toggle, self._toggle_tooltip),
             Tooltip(self.slider, "Adjust this device's output volume."),
             Tooltip(self.mute_button, self._mute_tooltip),
@@ -629,7 +632,7 @@ class DeviceRow(RoundedFrame):
 
         # Make the whole card a right-click target, including its labels and
         # controls, so renaming does not depend on finding a narrow empty area.
-        for widget in (self, head, labels, name_row, self.name, self.quality,
+        for widget in (self, head, labels, name_row, self.name, self.latency,
                        self.type_label, self.note_row, self.note, self.retry_button,
                        self.toggle, self.volume_row, self.mute_button, self.slider,
                        self.percent, self.sync_row, self.sync, self.sync_value,
@@ -658,7 +661,7 @@ class DeviceRow(RoundedFrame):
             return
 
         self.name.pack_forget()
-        self.quality.pack_forget()
+        self.latency.pack_forget()
         entry = tk.Entry(
             self._name_row, bg=CARD, fg=TEXT, insertbackground=TEXT,
             selectbackground=ACCENT, selectforeground=ACCENT_INK,
@@ -726,7 +729,7 @@ class DeviceRow(RoundedFrame):
         self.name.configure(text=name)
         self._name_tooltip.text = name
         self.name.pack(side="left", anchor="w")
-        self.quality.pack(side="left", padx=(px(5), 0))
+        self.latency.pack(side="left", padx=(px(5), 0))
 
     def _toggle_tooltip(self) -> str:
         action = "Stop routing audio to" if self.device.id in self.app.selected else "Route audio to"
@@ -742,17 +745,11 @@ class DeviceRow(RoundedFrame):
             return "Resume the test sound."
         return "Play a test sound on this device."
 
-    def _quality_tooltip(self) -> str:
-        if self.quality.level is None:
-            return "Playback stability is unavailable until this device is connected."
-        descriptions = {
-            0: "No playback stability data yet.",
-            1: "Weak playback stability: frequent audio underruns.",
-            2: "Medium playback stability: occasional audio underruns.",
-            3: "Strong playback stability: few recent audio underruns.",
-            4: "Strong playback stability: no recent audio underruns.",
-        }
-        return descriptions[self.quality.level] + " This is not Bluetooth signal strength."
+    def _latency_tooltip(self) -> str:
+        latency_ms = self.latency.latency_ms
+        if latency_ms is None:
+            return "Latency unavailable"
+        return "%d ms" % latency_ms
 
     def _retry(self) -> None:
         self.retry_button.configure(state="disabled", text="Retrying…")
@@ -1053,17 +1050,24 @@ class App(tk.Tk):
         self.device_names: dict[str, str] = {}
         self.rows: dict = {}
         self._signature = None
+        self._scan_initialized = False
+        self._disconnected_selected: set[str] = set()
+        self._active_stream_issues: set[str] = set()
         self._report = None
         self._test_state: dict = {}
         self._test_jobs: dict = {}
         self._test_remaining: dict = {}
         self._test_started_at: dict = {}
-        self._quality_last_underruns: dict[str, int] = {}
         self._scan_job = None
         self._theme_job = None
-        self._quality_job = None
+        self._latency_job = None
         self._media_tick_job = None
         self._tray_icon = None
+        self._routing_paused = False
+        self._toast_queue: list[tuple[str, str]] = []
+        self._toast_job = None
+        self._notification_sound_lock = threading.Lock()
+        self._close_reminder_shown = False
         self._tray_actions: queue.Queue[str] = queue.Queue()
         self._instance_guard = instance_guard
         self._media_reader = MediaSessionReader()
@@ -1086,15 +1090,20 @@ class App(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._hide_to_tray)
         self.bind_all("<MouseWheel>", self._wheel)
         self.bind("<Map>", self._mapped)
+        try:
+            self._ensure_tray_icon()
+        except Exception as exc:
+            self.status.configure(
+                text="Could not create the system tray icon: %s" % exc, fg=DANGER)
         self._scan()
         self._media_reader.start()
         self._bluetooth_controller.start()
         self._drain()
         self._theme_job = self.after(1500, self._watch_theme)
-        self._quality_job = self.after(1000, self._refresh_quality)
+        self._latency_job = self.after(1000, self._refresh_latency)
         self._media_tick_job = self.after(1000, self._tick_now_playing)
         if start_hidden:
-            self.after_idle(self._hide_to_tray)
+            self.after_idle(lambda: self._hide_to_tray(show_reminder=False))
 
     # -- layout ------------------------------------------------------------
 
@@ -1420,10 +1429,24 @@ class App(tk.Tk):
         except Exception:
             devices, default = [], None
 
+        previous_source_id = self.source.id if self.source else None
+        previously_disconnected = set(self._disconnected_selected)
         self.devices = devices
         self.source = next((d for d in devices if d.id == default), None)
         if self.source is None and devices:
             self.source = devices[0]
+
+        connected_ids = {device.id for device in devices}
+        current_source_id = self.source.id if self.source else None
+        reconnected = (previously_disconnected & self.selected & connected_ids)
+        if current_source_id is not None:
+            reconnected.discard(current_source_id)
+        source_changed = (
+            self._scan_initialized and previous_source_id is not None
+            and current_source_id is not None
+            and previous_source_id != current_source_id)
+        self._disconnected_selected = self.selected - connected_ids
+        self._scan_initialized = True
 
         signature = (tuple(sorted((d.id, d.name) for d in devices)),
                      self.source.id if self.source else None)
@@ -1431,6 +1454,18 @@ class App(tk.Tk):
             self._signature = signature
             self._rebuild_rows()
             self._apply()
+        if source_changed:
+            self._notify_toast(
+                "Audio source changed",
+                "Now sharing audio from %s." % self._device_name(self.source))
+        if reconnected:
+            names = [self._device_name(next(
+                device for device in devices if device.id == device_id))
+                for device_id in sorted(reconnected)]
+            label = names[0] if len(names) == 1 else "%d devices" % len(names)
+            self._notify_toast(
+                "Remembered device reconnected",
+                "%s is back. SeBlue will resume routing audio." % label)
         self._scan_job = self.after(SCAN_MS, self._scan)
 
     def _rebuild_rows(self) -> None:
@@ -1580,6 +1615,10 @@ class App(tk.Tk):
         self.worker.cancel_test_requests()
 
     def _apply(self) -> None:
+        if self._routing_paused:
+            self.worker.request(self.source.name if self.source else "", [])
+            self.status.configure(text="Audio routing paused.", fg=DIM)
+            return
         if self.source is None:
             message = (self._idle_status_text()
                        if self._bluetooth_enabled is False
@@ -1633,6 +1672,7 @@ class App(tk.Tk):
             pass
         if bluetooth_changed:
             self._render_bluetooth_button()
+            self._update_tray_menu()
         if bluetooth_state_changed:
             self._scan_now()
         arrived = False
@@ -1645,6 +1685,7 @@ class App(tk.Tk):
                     self._test_failed(report["test_error"], report.get("detail", ""))
                 else:
                     self._report = report
+                    self._notify_stream_issues(report)
                     arrived = True
         except queue.Empty:
             pass
@@ -1652,6 +1693,100 @@ class App(tk.Tk):
             self._paint_notes()
             self._paint_status()
         self.after(120, self._drain)
+
+    def _notify_toast(self, title: str, message: str) -> None:
+        if self._closing:
+            return
+        try:
+            self._ensure_tray_icon()
+        except Exception:
+            return
+        self._toast_queue.append((title, message))
+        if self._toast_job is None:
+            # Let the tray icon finish registering before sending the first
+            # Shell_NotifyIcon balloon notification.
+            self._toast_job = self.after(450, self._flush_toast_queue)
+
+    def _flush_toast_queue(self) -> None:
+        self._toast_job = None
+        if self._closing or not self._toast_queue or self._tray_icon is None:
+            return
+        title, message = self._toast_queue.pop(0)
+        try:
+            self._tray_icon.notify(message[:240], title=title[:63])
+            self._play_notification_sound()
+        except Exception:
+            pass
+        if self._toast_queue:
+            self._toast_job = self.after(1200, self._flush_toast_queue)
+
+    def _play_notification_sound(self) -> None:
+        if miniaudio is None or not NOTIFICATION_SOUND.is_file():
+            return
+
+        def play() -> None:
+            if not self._notification_sound_lock.acquire(blocking=False):
+                return
+            try:
+                sound = miniaudio.decode_file(str(NOTIFICATION_SOUND))
+                sample_width = miniaudio.width_from_format(sound.sample_format)
+                stream = miniaudio.stream_raw_pcm_memory(
+                    sound.samples, sound.nchannels, sample_width)
+                with miniaudio.PlaybackDevice(
+                        output_format=sound.sample_format,
+                        nchannels=sound.nchannels,
+                        sample_rate=sound.sample_rate,
+                        app_name="SeBlue") as device:
+                    device.start(stream)
+                    time.sleep(sound.duration + 0.1)
+            except Exception:
+                # A sound device may be unavailable even when tray notifications work.
+                pass
+            finally:
+                self._notification_sound_lock.release()
+
+        threading.Thread(target=play, name="SeBlueNotificationSound",
+                         daemon=True).start()
+
+    def _notify_stream_issues(self, report: dict) -> None:
+        failed = report.get("failed", {}) or {}
+        missing = set(report.get("missing", []) or [])
+        current_issues = set(failed) | missing
+        new_issues = current_issues - self._active_stream_issues
+        self._active_stream_issues = current_issues
+        if not new_issues:
+            return
+
+        if "*" in new_issues:
+            detail = str(failed.get("*", "Audio routing could not start."))
+            self._notify_toast("Audio routing failed", detail)
+            new_issues.discard("*")
+
+        failed_names = []
+        missing_names = []
+        for device_id in sorted(new_issues):
+            device = next((item for item in self.devices if item.id == device_id), None)
+            name = self._device_name(device) if device else self.device_names.get(
+                device_id, device_id)
+            if device_id in failed:
+                failed_names.append(name)
+            else:
+                missing_names.append(name)
+
+        if failed_names:
+            names = ", ".join(failed_names[:3])
+            if len(failed_names) > 3:
+                names += " and %d more" % (len(failed_names) - 3)
+            self._notify_toast(
+                "Audio stream failed",
+                "Could not open %s. Use Retry on its device row." % names)
+        if missing_names:
+            names = ", ".join(missing_names[:3])
+            if len(missing_names) > 3:
+                names += " and %d more" % (len(missing_names) - 3)
+            self._notify_toast(
+                "Selected device unavailable",
+                "%s disconnected. SeBlue will resume routing when it returns." % names)
 
     def _bluetooth_tooltip_text(self) -> str:
         if self._bluetooth_pending:
@@ -1730,6 +1865,16 @@ class App(tk.Tk):
         image = Image.open(APP_ICON_ICO).convert("RGBA")
         menu = Menu(
             MenuItem("Open SeBlue", self._queue_tray_open, default=True),
+            Menu.SEPARATOR,
+            MenuItem(lambda item: "Resume audio routing" if self._routing_paused
+                     else "Pause audio routing", self._queue_tray_pause),
+            MenuItem("Refresh devices", self._queue_tray_refresh),
+            MenuItem(lambda item: "Turn Bluetooth off" if self._bluetooth_enabled
+                     else "Turn Bluetooth on", self._queue_tray_bluetooth,
+                     enabled=lambda item: self._bluetooth_enabled is not None
+                     and not self._bluetooth_pending),
+            MenuItem("Copy diagnostics", self._queue_tray_copy_diagnostics),
+            Menu.SEPARATOR,
             MenuItem("Exit", self._queue_tray_exit),
         )
         self._tray_icon = pystray.Icon("SeBlue", image, "SeBlue", menu)
@@ -1741,6 +1886,83 @@ class App(tk.Tk):
     def _queue_tray_exit(self, _icon=None, _item=None) -> None:
         self._tray_actions.put("exit")
 
+    def _queue_tray_pause(self, _icon=None, _item=None) -> None:
+        self._tray_actions.put("pause")
+
+    def _queue_tray_refresh(self, _icon=None, _item=None) -> None:
+        self._tray_actions.put("refresh")
+
+    def _queue_tray_bluetooth(self, _icon=None, _item=None) -> None:
+        self._tray_actions.put("bluetooth")
+
+    def _queue_tray_copy_diagnostics(self, _icon=None, _item=None) -> None:
+        self._tray_actions.put("copy_diagnostics")
+
+    def _update_tray_menu(self) -> None:
+        if self._tray_icon is not None:
+            try:
+                self._tray_icon.update_menu()
+            except Exception:
+                pass
+
+    def _toggle_routing_from_tray(self) -> None:
+        self._routing_paused = not self._routing_paused
+        if self._routing_paused:
+            self._cancel_all_tests()
+        self._update_tray_menu()
+        self._apply()
+        if self._routing_paused:
+            self._notify_toast("Audio routing paused",
+                               "Audio routing to other devices is paused.")
+        else:
+            self._notify_toast("Audio routing resumed",
+                               "Audio routing to selected devices is active.")
+
+    def _copy_diagnostics(self) -> None:
+        stats = self.engine.stats()
+        report = self._report or {}
+        lines = [
+            "SeBlue diagnostics",
+            "Routing: %s" % ("paused" if self._routing_paused else "active"),
+            "Bluetooth: %s" % (
+                "on" if self._bluetooth_enabled is True else
+                "off" if self._bluetooth_enabled is False else "unknown"),
+            "Source: %s" % (self.source.name if self.source else "unavailable"),
+            "Selected outputs: %d" % len(self.selected),
+        ]
+        outcomes = {}
+        for device in report.get("ok", []):
+            outcomes[device] = "connected"
+        for device, error in report.get("failed", {}).items():
+            outcomes[device] = "failed: %s" % error
+        for device in report.get("missing", []):
+            outcomes[device] = "disconnected"
+        lines.append("Output streams:")
+        if not stats and not self.selected:
+            lines.append("  none")
+        for device_id in sorted(self.selected | set(stats)):
+            device = next((item for item in self.devices if item.id == device_id), None)
+            name = self._device_name(device) if device else device_id
+            item = stats.get(device_id)
+            if item:
+                lines.append(
+                    "  %s — %s; latency %d ms; buffer %d/%d ms; %d Hz, %d ch; "
+                    "delay %d ms; underruns %d; last error: %s" % (
+                        name, outcomes.get(device_id, "active"),
+                        item.get("latency_ms", 0), item.get("buffer_ms", 0),
+                        item.get("target_ms", 0), item.get("rate", 0),
+                        item.get("channels", 0), item.get("delay_ms", 0),
+                        item.get("underruns", 0), item.get("error") or "none"))
+            else:
+                lines.append("  %s — %s" % (
+                    name, outcomes.get(device_id, "not streaming")))
+        if self._bluetooth_error:
+            lines.append("Bluetooth detail: %s" % self._bluetooth_error)
+        self.clipboard_clear()
+        self.clipboard_append("\n".join(lines))
+        self.update_idletasks()
+        self._notify_toast("Diagnostics copied", "SeBlue diagnostics are on the clipboard.")
+
     def _drain_tray_actions(self) -> None:
         try:
             while True:
@@ -1749,10 +1971,18 @@ class App(tk.Tk):
                     self._restore_from_tray()
                 elif action == "exit":
                     self._close()
+                elif action == "pause":
+                    self._toggle_routing_from_tray()
+                elif action == "refresh":
+                    self._scan_now()
+                elif action == "bluetooth":
+                    self._toggle_bluetooth()
+                elif action == "copy_diagnostics":
+                    self._copy_diagnostics()
         except queue.Empty:
             pass
 
-    def _hide_to_tray(self) -> None:
+    def _hide_to_tray(self, show_reminder: bool = True) -> None:
         if self._closing:
             return
         try:
@@ -1761,6 +1991,11 @@ class App(tk.Tk):
             self.status.configure(
                 text="Could not open the system tray icon: %s" % exc, fg=DANGER)
             return
+        if show_reminder and not self._close_reminder_shown:
+            self._close_reminder_shown = True
+            self._notify_toast(
+                "SeBlue is still running",
+                "The window is hidden in the system tray. Choose Open SeBlue to return or Exit to quit.")
         self.withdraw()
 
     def _restore_from_tray(self) -> None:
@@ -1771,7 +2006,7 @@ class App(tk.Tk):
         self.lift()
         self.focus_force()
 
-    def _refresh_quality(self) -> None:
+    def _refresh_latency(self) -> None:
         try:
             stats = self.engine.stats()
         except Exception:
@@ -1782,25 +2017,11 @@ class App(tk.Tk):
                 continue
             device_stats = stats.get(device_id) if device_id in self.selected else None
             if device_stats is None:
-                self._quality_last_underruns.pop(device_id, None)
-                row.quality.set_level(None)
+                row.latency.set_latency(None)
                 continue
+            row.latency.set_latency(device_stats.get("latency_ms"))
 
-            underruns = int(device_stats.get("underruns", 0))
-            previous = self._quality_last_underruns.get(device_id, underruns)
-            recent = max(0, underruns - previous)
-            self._quality_last_underruns[device_id] = underruns
-            if recent == 0:
-                level = 4
-            elif recent <= 2:
-                level = 3
-            elif recent <= 8:
-                level = 2
-            else:
-                level = 1
-            row.quality.set_level(level)
-
-        self._quality_job = self.after(1000, self._refresh_quality)
+        self._latency_job = self.after(1000, self._refresh_latency)
 
     def _paint_notes(self) -> None:
         report = self._report or {}
@@ -1829,6 +2050,9 @@ class App(tk.Tk):
                 row.show_note("")
 
     def _paint_status(self) -> None:
+        if self._routing_paused:
+            self.status.configure(text="Audio routing paused.", fg=DIM)
+            return
         report = self._report or {}
         if report.get("failed", {}).get("*"):
             self.status.configure(text=report["failed"]["*"], fg=DANGER)
@@ -1965,14 +2189,15 @@ class App(tk.Tk):
         if self._closing:
             return
         self._closing = True
-        for job in (self._scan_job, self._theme_job, self._quality_job,
-                    self._media_tick_job,
+        for job in (self._scan_job, self._theme_job, self._latency_job,
+                    self._media_tick_job, self._toast_job,
                     *self._test_jobs.values()):
             if job is not None:
                 try:
                     self.after_cancel(job)
                 except Exception:
                     pass
+        self._toast_queue.clear()
         if self._tray_icon is not None:
             try:
                 self._tray_icon.stop()

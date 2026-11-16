@@ -1,6 +1,6 @@
 # SeBlue Connect
 <p align="center">
-  <img src="docs/seblue.png" alt="SeBlue">
+  <img src="docs/seblue.png" alt="SeBlue" width=128px height = 128px>
 </p>
 
 SeBlue routes audio from the current Windows output to other connected audio
